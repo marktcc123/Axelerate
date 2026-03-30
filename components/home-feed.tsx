@@ -75,9 +75,12 @@ function EventsSection({
 }) {
   if (isLoading) {
     return (
-      <div className="-mx-5 mb-6 flex gap-4 px-5">
+      <div className="-mx-5 mb-6 flex w-full touch-pan-x snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain px-5 pb-3 [-webkit-overflow-scrolling:touch] scrollbar-visible">
         {[1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-36 w-56 shrink-0 rounded-2xl" />
+          <Skeleton
+            key={i}
+            className="h-36 w-56 min-w-[224px] shrink-0 snap-center rounded-2xl"
+          />
         ))}
       </div>
     );
@@ -95,32 +98,31 @@ function EventsSection({
   }
 
   return (
-    <div className="-mx-5 overflow-x-auto px-5 scrollbar-none">
-      <div className="flex gap-4">
-        {events.map((event) => (
-          <button
-            key={event.id}
-            onClick={() => onEventClick(event)}
-            className="relative flex h-36 w-56 shrink-0 overflow-hidden rounded-2xl border-2 border-border bg-muted/50 shadow-sm transition-all hover:border-primary/40 active:scale-[0.98] dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-none"
-          >
-            {event.image_url ? (
-              <img
-                src={event.image_url}
-                alt=""
-                className="absolute inset-0 h-full w-full object-cover"
-              />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-brand-primary/20 to-purple-500/20" />
-            )}
-            <div className="absolute inset-0 feed-image-scrim" />
-            <div className="relative flex flex-1 flex-col justify-end p-4 text-left">
-              <h3 className="text-sm font-bold text-foreground drop-shadow-sm dark:text-white dark:drop-shadow-md">
-                {event.title}
-              </h3>
-            </div>
-          </button>
-        ))}
-      </div>
+    <div className="-mx-5 flex w-full touch-pan-x snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain px-5 pb-3 [-webkit-overflow-scrolling:touch] scrollbar-visible">
+      {events.map((event) => (
+        <button
+          key={event.id}
+          type="button"
+          onClick={() => onEventClick(event)}
+          className="relative flex h-36 w-56 min-w-[224px] shrink-0 snap-center overflow-hidden rounded-2xl border-2 border-border bg-muted/50 shadow-sm transition-all hover:border-primary/40 active:scale-[0.98] dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-none"
+        >
+          {event.image_url ? (
+            <img
+              src={event.image_url}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-brand-primary/20 to-purple-500/20" />
+          )}
+          <div className="absolute inset-0 feed-image-scrim" />
+          <div className="relative flex flex-1 flex-col justify-end p-4 text-left">
+            <h3 className="text-sm font-bold text-foreground drop-shadow-sm dark:text-white dark:drop-shadow-md">
+              {event.title}
+            </h3>
+          </div>
+        </button>
+      ))}
     </div>
   );
 }
@@ -1296,7 +1298,7 @@ export function HomeFeed({ onSelectGig, onRequestLogin }: HomeFeedProps) {
           </div>
           </div>
 
-          <div id="events-section" className="mb-8 scroll-mt-24">
+          <div id="events-section" className="mb-8 min-w-0 scroll-mt-24">
             <SectionHeader icon={CalendarDays} title="Exclusive Events" />
             <EventsSection
             events={events}
