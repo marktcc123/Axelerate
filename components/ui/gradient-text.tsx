@@ -1,0 +1,138 @@
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  motion,
+  useMotionValue,
+  useAnimationFrame,
+  useTransform,
+} from "framer-motion";
+import { cn } from "@/lib/utils";
+import "./gradient-text.css";
+
+export type GradientTextProps = {
+  children: ReactNode;
+  className?: string;
+  colors?: string[];
+  animationSpeed?: number;
+  showBorder?: boolean;
+  direction?: "horizontal" | "vertical" | "diagonal";
+  pauseOnHover?: boolean;
+  yoyo?: boolean;
+};
+
+export default function GradientText({
+  children,
+  className = "",
+  colors = ["#5227FF", "#FF9FFC", "#B19EEF"],
+  animationSpeed = 8,
+  showBorder = false,
+  direction = "horizontal",
+  pauseOnHover = false,
+  yoyo = true,
+}: GradientTextProps) {
+  const [isPaused, setIsPaused] = useState(false);
+  const progress = useMotionValue(0);
+  const elapsedRef = useRef(0);
+
+  const animationDuration = animationSpeed * 1000;
+
+  const onFrame = useCallback(
+    (_timeSinceStart: number, delta: number) => {
+      if (isPaused) return;
+      elapsedRef.current += delta;
+
+      if (yoyo) {
+        const fullCycle = animationDuration * 2;
+        const cycleTime = elapsedRef.current % fullCycle;
+
+        if (cycleTime < animationDuration) {
+          progress.set((cycleTime / animationDuration) * 100);
+        } else {
+          progress.set(
+            100 - ((cycleTime - animationDuration) / animationDuration) * 100
+          );
+        }
+      } else {
+        const p = (elapsedRef.current / animationDuration) * 100;
+        progress.set(p % 100);
+      }
+    },
+    [isPaused, animationDuration, yoyo, progress]
+  );
+
+  useAnimationFrame(onFrame);
+
+  useEffect(() => {
+    elapsedRef.current = 0;
+    progress.set(0);
+  }, [animationSpeed, yoyo, progress]);
+
+  const backgroundPosition = useTransform(progress, (p) => {
+    if (direction === "horizontal") {
+      return `${p}% 50%`;
+    }
+    if (direction === "vertical") {
+      return `50% ${p}%`;
+    }
+    return `${p}% 50%`;
+  });
+
+  const handleMouseEnter = useCallback(() => {
+    if (pauseOnHover) setIsPaused(true);
+  }, [pauseOnHover]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (pauseOnHover) setIsPaused(false);
+  }, [pauseOnHover]);
+
+  const gradientAngle =
+    direction === "horizontal"
+      ? "to right"
+      : direction === "vertical"
+        ? "to bottom"
+        : "to bottom right";
+  const gradientColors = [...colors, colors[0]].join(", ");
+
+  const gradientStyle = {
+    backgroundImage: `linear-gradient(${gradientAngle}, ${gradientColors})`,
+    backgroundSize:
+      direction === "horizontal"
+        ? "300% 100%"
+        : direction === "vertical"
+          ? "100% 300%"
+          : "300% 300%",
+    backgroundRepeat: "repeat" as const,
+  };
+
+  return (
+    <motion.div
+      className={cn(
+        "animated-gradient-text",
+        showBorder && "with-border",
+        className
+      )}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      {showBorder && (
+        <motion.div
+          className="gradient-overlay"
+          style={{ ...gradientStyle, backgroundPosition }}
+        />
+      )}
+      <motion.div
+        className="text-content"
+        style={{ ...gradientStyle, backgroundPosition }}
+      >
+        {children}
+      </motion.div>
+    </motion.div>
+  );
+}

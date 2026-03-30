@@ -1,0 +1,1 @@
+{"sessionId":"3bfa82","runId":"post-fix","hypothesisId":"A","location":"landing-hero.tsx:LandingHero","message":"Hero mounted; pre-title is single motion.p (no nested p)","data":{"preTitlePattern":"motion.p > text only"},"timestamp":1774631339631}

@@ -1,0 +1,161 @@
+import { revalidatePath } from "next/cache";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+export type CheckoutFulfillResult =
+  | { success: true }
+  | { success: false; error: string };
+
+export type CartLine = { id: string; quantity: number };
+
+/**
+ * 扣库存、写订单、记 product_purchases（余额结账与 Stripe webhook 共用）。
+ * 调用前应由各入口完成验价；此处再次查库校验库存与余额。
+ */
+export async function fulfillPerksShopOrder(
+  supabase: SupabaseClient,
+  options: {
+    userId: string;
+    cartItems: CartLine[];
+    deductCashFromBalance: number;
+    deductCredits: number;
+    orderCashPaid: number;
+    stripeCheckoutSessionId?: string | null;
+  }
+): Promise<CheckoutFulfillResult> {
+  const {
+    userId,
+    cartItems,
+    deductCashFromBalance,
+    deductCredits,
+    orderCashPaid,
+    stripeCheckoutSessionId,
+  } = options;
+
+  if (stripeCheckoutSessionId) {
+    const { data: dup } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("stripe_checkout_session_id", stripeCheckoutSessionId)
+      .maybeSingle();
+    if (dup) return { success: true };
+  }
+
+  const productIds = cartItems.map((c) => c.id);
+  const { data: products, error: fetchError } = await supabase
+    .from("products")
+    .select("id, stock_count")
+    .in("id", productIds);
+
+  if (fetchError || !products) {
+    console.error("[fulfillPerksShopOrder] fetch products:", fetchError);
+    return { success: false, error: "Failed to verify inventory" };
+  }
+
+  const productMap = new Map(products.map((p) => [p.id, p]));
+
+  for (const item of cartItems) {
+    const product = productMap.get(item.id);
+    if (!product) {
+      return { success: false, error: "Product not found." };
+    }
+    const stockLeft = product.stock_count ?? 0;
+    if (stockLeft < item.quantity) {
+      return { success: false, error: "Out of stock" };
+    }
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("cash_balance, credit_balance")
+    .eq("id", userId)
+    .single();
+
+  if (profileError || !profile) {
+    return { success: false, error: "Invalid user" };
+  }
+
+  const cashBalance = Number(profile.cash_balance ?? 0);
+  const creditBalance = Number(profile.credit_balance ?? 0);
+
+  if (creditBalance < deductCredits) {
+    return { success: false, error: "Insufficient credits" };
+  }
+  if (deductCashFromBalance > 0 && cashBalance < deductCashFromBalance) {
+    return { success: false, error: "Insufficient funds" };
+  }
+
+  try {
+    const { error: updateProfileError } = await supabase
+      .from("profiles")
+      .update({
+        cash_balance: cashBalance - deductCashFromBalance,
+        credit_balance: creditBalance - deductCredits,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", userId);
+
+    if (updateProfileError) {
+      console.error("[fulfillPerksShopOrder] profile update:", updateProfileError);
+      return { success: false, error: "Checkout failed" };
+    }
+
+    for (const item of cartItems) {
+      const product = productMap.get(item.id)!;
+      const newStock = Math.max(0, (product.stock_count ?? 0) - item.quantity);
+      const { error: updateStockError } = await supabase
+        .from("products")
+        .update({
+          stock_count: newStock,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", item.id);
+
+      if (updateStockError) {
+        console.error("[fulfillPerksShopOrder] stock update:", updateStockError);
+        return { success: false, error: "Inventory update failed" };
+      }
+    }
+
+    const orderRow: Record<string, unknown> = {
+      user_id: userId,
+      cash_paid: orderCashPaid,
+      credits_used: deductCredits,
+      status: "processing",
+      items: cartItems,
+    };
+    if (stripeCheckoutSessionId) {
+      orderRow.stripe_checkout_session_id = stripeCheckoutSessionId;
+    }
+
+    const { error: insertOrderError } = await supabase.from("orders").insert(orderRow);
+
+    if (insertOrderError) {
+      if (
+        insertOrderError.code === "23505" &&
+        String(insertOrderError.message).includes("stripe_checkout_session_id")
+      ) {
+        return { success: true };
+      }
+      console.error("[fulfillPerksShopOrder] insert order:", insertOrderError);
+      return { success: false, error: "Order creation failed" };
+    }
+
+    for (const item of cartItems) {
+      await supabase.from("product_purchases").insert({
+        user_id: userId,
+        product_id: item.id,
+        quantity: item.quantity,
+      });
+    }
+
+    revalidatePath("/");
+    for (const item of cartItems) {
+      revalidatePath(`/product/${item.id}`);
+    }
+
+    return { success: true };
+  } catch (e) {
+    console.error("[fulfillPerksShopOrder] error:", e);
+    return { success: false, error: "Checkout failed" };
+  }
+}
