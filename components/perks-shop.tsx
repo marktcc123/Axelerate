@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useMemo, useEffect, useTransition, useRef } from "react";
+import { useState, useMemo, useEffect, useTransition, useRef, useCallback } from "react";
 import {
   ShoppingBag,
   Lock,
@@ -20,6 +20,8 @@ import {
   Check,
   CreditCard,
   Wallet,
+  SlidersHorizontal,
+  Star,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -39,6 +41,8 @@ import {
 import type { Product, UserTier } from "@/lib/types";
 import { TierBadge } from "./tier-badge";
 import { Skeleton } from "./ui/skeleton";
+import { Checkbox } from "./ui/checkbox";
+import { Label } from "./ui/label";
 import Confetti from "react-confetti";
 import { processCheckout } from "@/app/actions/checkout";
 import {
@@ -870,10 +874,226 @@ function GiftDrawer({
   );
 }
 
+type AvailabilityFilter = "all" | "in_stock" | "sold_out" | "low_stock";
+type TierAccessFilter = "all" | "unlocked" | "locked";
+
+function FilterChipGroup<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          className={cn(
+            "rounded-full border-2 px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider transition-colors",
+            value === opt.value
+              ? "border-brand-primary bg-brand-primary/15 text-brand-primary"
+              : "border-border bg-muted/50 text-muted-foreground hover:bg-muted dark:border-white/10 dark:bg-white/5"
+          )}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ShopFiltersDrawer({
+  open,
+  onOpenChange,
+  brandOptions,
+  selectedBrandIds,
+  onToggleBrand,
+  onClearBrands,
+  onSelectAllBrands,
+  availability,
+  onAvailabilityChange,
+  tierAccess,
+  onTierAccessChange,
+  featuredOnly,
+  onFeaturedOnlyChange,
+  onResetAll,
+  activeCount,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  brandOptions: { id: string; name: string }[];
+  selectedBrandIds: string[];
+  onToggleBrand: (id: string) => void;
+  onClearBrands: () => void;
+  onSelectAllBrands: () => void;
+  availability: AvailabilityFilter;
+  onAvailabilityChange: (v: AvailabilityFilter) => void;
+  tierAccess: TierAccessFilter;
+  onTierAccessChange: (v: TierAccessFilter) => void;
+  featuredOnly: boolean;
+  onFeaturedOnlyChange: (v: boolean) => void;
+  onResetAll: () => void;
+  activeCount: number;
+}) {
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent className="max-h-[88vh] border-t-2 border-border bg-card text-card-foreground dark:border-white/10 dark:bg-zinc-950 [&>div:first-child]:bg-muted dark:[&>div:first-child]:bg-white/20">
+        <div className="flex max-h-[calc(88vh-2rem)] flex-col px-4 pb-8 pt-2">
+          <div className="mb-4 flex items-center justify-between border-b border-border pb-3 dark:border-white/10">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="h-4 w-4 text-brand-primary" />
+              <DrawerTitle className="text-sm font-bold uppercase tracking-widest text-foreground dark:text-white">
+                Filters
+              </DrawerTitle>
+              {activeCount > 0 && (
+                <span className="rounded-full bg-brand-primary/20 px-2 py-0.5 font-mono text-[10px] font-bold text-brand-primary">
+                  {activeCount} active
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onResetAll}
+                className="font-mono text-[10px] font-bold uppercase tracking-wider text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              >
+                Reset all
+              </button>
+              <DrawerClose className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-border bg-muted dark:border-transparent dark:bg-white/10">
+                <X className="h-4 w-4" />
+              </DrawerClose>
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1 scrollbar-visible">
+            <section>
+              <h3 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                Brand
+              </h3>
+              <div className="mb-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={onSelectAllBrands}
+                  className="rounded-lg border-2 border-border bg-muted/40 px-2 py-1 font-mono text-[9px] font-bold uppercase text-foreground dark:border-white/10"
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  onClick={onClearBrands}
+                  className="rounded-lg border-2 border-border bg-muted/40 px-2 py-1 font-mono text-[9px] font-bold uppercase text-muted-foreground dark:border-white/10"
+                >
+                  Clear brands
+                </button>
+              </div>
+              <div className="max-h-44 space-y-2 overflow-y-auto rounded-xl border-2 border-border bg-muted/20 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+                {brandOptions.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No brands in catalog</p>
+                ) : (
+                  brandOptions.map((b) => {
+                    const checked = selectedBrandIds.includes(b.id);
+                    return (
+                      <div key={b.id} className="flex items-center gap-3">
+                        <Checkbox
+                          id={`shop-brand-${b.id}`}
+                          checked={checked}
+                          onCheckedChange={() => onToggleBrand(b.id)}
+                        />
+                        <Label
+                          htmlFor={`shop-brand-${b.id}`}
+                          className="flex-1 cursor-pointer truncate text-sm font-medium text-foreground dark:text-white"
+                        >
+                          {b.name}
+                        </Label>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                Availability
+              </h3>
+              <FilterChipGroup
+                value={availability}
+                onChange={onAvailabilityChange}
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "in_stock", label: "In stock" },
+                  { value: "sold_out", label: "Sold out" },
+                  { value: "low_stock", label: "Low stock" },
+                ]}
+              />
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                Low stock: fewer than 15 units left.
+              </p>
+            </section>
+
+            <section>
+              <h3 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                Your tier
+              </h3>
+              <FilterChipGroup
+                value={tierAccess}
+                onChange={onTierAccessChange}
+                options={[
+                  { value: "all", label: "All items" },
+                  { value: "unlocked", label: "Redeemable now" },
+                  { value: "locked", label: "Locked for me" },
+                ]}
+              />
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                Based on your current rank vs. each item&apos;s minimum tier.
+              </p>
+            </section>
+
+            <section>
+              <div className="flex items-center gap-3 rounded-xl border-2 border-border bg-muted/20 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+                <Checkbox
+                  id="shop-featured-only"
+                  checked={featuredOnly}
+                  onCheckedChange={(c) => onFeaturedOnlyChange(c === true)}
+                />
+                <Label
+                  htmlFor="shop-featured-only"
+                  className="flex cursor-pointer items-center gap-2 text-sm font-medium text-foreground dark:text-white"
+                >
+                  <Star className="h-4 w-4 text-brand-primary" />
+                  Featured picks only
+                </Label>
+              </div>
+            </section>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            className="mt-4 w-full rounded-2xl border-2 border-border bg-brand-primary py-3 font-mono text-sm font-bold uppercase tracking-wider text-primary-foreground shadow-sm dark:border-white/10"
+          >
+            Show results
+          </button>
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
 export function PerksShop() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [selectedCategory, setSelectedCategory] = useState<CategoryTab>("All");
+  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
+  const [selectedBrandIds, setSelectedBrandIds] = useState<string[]>([]);
+  const [availability, setAvailability] = useState<AvailabilityFilter>("all");
+  const [tierAccess, setTierAccess] = useState<TierAccessFilter>("all");
+  const [featuredOnly, setFeaturedOnly] = useState(false);
   const cartItems = useCartStore((s) => s.items);
   const addItem = useCartStore((s) => s.addItem);
   const updateQuantity = useCartStore((s) => s.updateQuantity);
@@ -911,16 +1131,80 @@ export function PerksShop() {
     router.replace("/?tab=shop", { scroll: false });
   }, [searchParams, router, refetchPrivate, clearCart]);
 
+  const brandOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of publicProducts) {
+      if (!map.has(p.brand_id)) {
+        const name = p.brand?.name?.trim() || "Partner brand";
+        map.set(p.brand_id, name);
+      }
+    }
+    return Array.from(map.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [publicProducts]);
+
   const filteredProducts = useMemo(() => {
     return publicProducts.filter((p) => {
       if (selectedCategory === "Drops") {
-        return p.is_drop === true || p.drop_time != null;
+        if (!(p.is_drop === true || p.drop_time != null)) return false;
+      } else if (selectedCategory !== "All") {
+        const cat = (p.category ?? "Beauty").toLowerCase();
+        if (cat !== selectedCategory.toLowerCase()) return false;
       }
-      if (selectedCategory === "All") return true;
-      const cat = (p.category ?? "Beauty").toLowerCase();
-      return cat === selectedCategory.toLowerCase();
+
+      if (selectedBrandIds.length > 0 && !selectedBrandIds.includes(p.brand_id)) {
+        return false;
+      }
+
+      if (availability === "in_stock" && p.stock_count <= 0) return false;
+      if (availability === "sold_out" && p.stock_count !== 0) return false;
+      if (
+        availability === "low_stock" &&
+        !(p.stock_count > 0 && p.stock_count < 15)
+      ) {
+        return false;
+      }
+
+      const tierOk = canAccessTier(userTier, p.min_tier_required);
+      if (tierAccess === "unlocked" && !tierOk) return false;
+      if (tierAccess === "locked" && tierOk) return false;
+
+      if (featuredOnly && p.is_featured !== true) return false;
+
+      return true;
     });
-  }, [publicProducts, selectedCategory]);
+  }, [
+    publicProducts,
+    selectedCategory,
+    selectedBrandIds,
+    availability,
+    tierAccess,
+    featuredOnly,
+    userTier,
+  ]);
+
+  const activeFilterCount = useMemo(() => {
+    let n = 0;
+    if (selectedBrandIds.length > 0) n += 1;
+    if (availability !== "all") n += 1;
+    if (tierAccess !== "all") n += 1;
+    if (featuredOnly) n += 1;
+    return n;
+  }, [selectedBrandIds.length, availability, tierAccess, featuredOnly]);
+
+  const resetShopFilters = useCallback(() => {
+    setSelectedBrandIds([]);
+    setAvailability("all");
+    setTierAccess("all");
+    setFeaturedOnly(false);
+  }, []);
+
+  const toggleBrandFilter = useCallback((id: string) => {
+    setSelectedBrandIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }, []);
 
   const addToCart = (product: Product) => {
     addItem(product, 1);
@@ -1019,6 +1303,50 @@ export function PerksShop() {
           ))}
         </div>
       </div>
+
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 px-1">
+        <button
+          type="button"
+          onClick={() => setFilterDrawerOpen(true)}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-full border-2 px-4 py-2 font-mono text-xs font-bold uppercase tracking-wider transition-colors",
+            activeFilterCount > 0
+              ? "border-brand-primary bg-brand-primary/10 text-brand-primary"
+              : "border-border bg-muted/60 text-muted-foreground hover:bg-muted dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
+          )}
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          Filters
+          {activeFilterCount > 0 && (
+            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-primary px-1.5 text-[10px] font-black text-primary-foreground">
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
+        <p className="font-mono text-[10px] text-muted-foreground">
+          {filteredProducts.length} of {publicProducts.length} items
+        </p>
+      </div>
+
+      <ShopFiltersDrawer
+        open={filterDrawerOpen}
+        onOpenChange={setFilterDrawerOpen}
+        brandOptions={brandOptions}
+        selectedBrandIds={selectedBrandIds}
+        onToggleBrand={toggleBrandFilter}
+        onClearBrands={() => setSelectedBrandIds([])}
+        onSelectAllBrands={() =>
+          setSelectedBrandIds(brandOptions.map((b) => b.id))
+        }
+        availability={availability}
+        onAvailabilityChange={setAvailability}
+        tierAccess={tierAccess}
+        onTierAccessChange={setTierAccess}
+        featuredOnly={featuredOnly}
+        onFeaturedOnlyChange={setFeaturedOnly}
+        onResetAll={resetShopFilters}
+        activeCount={activeFilterCount}
+      />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
         {filteredProducts.map((product, i) => {
@@ -1179,9 +1507,20 @@ export function PerksShop() {
         <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border py-12 text-center dark:border-white/10">
           <Package className="mb-3 h-8 w-8 text-muted-foreground" />
           <p className="text-sm font-bold text-foreground dark:text-white">No items here</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Check back later for new drops
+          <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+            {activeFilterCount > 0
+              ? "Nothing matches these filters. Try resetting or broadening brand / tier / stock filters."
+              : "Check back later for new drops"}
           </p>
+          {activeFilterCount > 0 && (
+            <button
+              type="button"
+              onClick={resetShopFilters}
+              className="mt-4 rounded-full border-2 border-border bg-muted px-4 py-2 font-mono text-[10px] font-bold uppercase tracking-wider text-foreground dark:border-white/10"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
       )}
 

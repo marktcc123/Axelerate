@@ -70,7 +70,7 @@ export function LandingHero() {
             transition={{ duration: 0.48, delay: sequence[2] }}
           >
             <p className="font-mono text-sm font-medium leading-relaxed tracking-tight text-foreground md:text-[0.95rem] md:leading-7">
-              Turn your campus influence into cash. Complete digital UGC drops for top brands, RSVP to
+              Turn your campus influence into cash. Complete digital UGC drops for top brands, attend to
               exclusive offline pop-ups, and stack XP to level up your lifestyle.
             </p>
             <p className="font-mono text-xs font-medium leading-relaxed tracking-tight text-muted-foreground md:text-sm md:leading-6">

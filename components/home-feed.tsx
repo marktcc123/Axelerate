@@ -466,9 +466,11 @@ function BrandDetailsDrawer({
               </h3>
               <div className="space-y-2">
                 {brandProducts.map((product) => (
-                  <div
+                  <Link
                     key={product.id}
-                    className="flex items-center gap-3 rounded-xl border-2 border-border bg-muted/40 p-3 dark:border-white/10 dark:bg-white/5"
+                    href={`/product/${product.id}`}
+                    onClick={() => onOpenChange(false)}
+                    className="flex w-full items-center gap-3 rounded-xl border-2 border-border bg-muted/40 p-3 text-left transition-all hover:border-primary/35 active:scale-[0.99] dark:border-white/10 dark:bg-white/5"
                   >
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted dark:bg-white/5">
                       {product.image_url ? (
@@ -489,7 +491,8 @@ function BrandDetailsDrawer({
                         {product.discount_price ?? product.original_price ?? product.price_credits} pts
                       </p>
                     </div>
-                  </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                  </Link>
                 ))}
               </div>
             </div>
