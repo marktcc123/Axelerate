@@ -8,12 +8,15 @@ import { HomeFeed } from "@/components/home-feed";
 import { GigDetail } from "@/components/gig-detail";
 import { MyGigs } from "@/components/my-gigs";
 import { PerksShop } from "@/components/perks-shop";
-import { UserProfile } from "@/components/user-profile";
+import { UserProfile, SHOW_ELITE_TRACKS_DRAWER } from "@/components/user-profile";
 import type { ProfileDrawerKey } from "@/components/user-profile";
 import { Drawer, DrawerContent, DrawerTitle, DrawerClose } from "@/components/ui/drawer";
 import { X } from "lucide-react";
 import { useAppDataContext } from "@/lib/context/app-data-context";
-import { VerificationDrawer } from "@/components/drawers/verification-drawer";
+import {
+  VerificationDrawer,
+  VERIFICATION_DRAWER_PAGE_TITLE,
+} from "@/components/drawers/verification-drawer";
 import { WalletDrawer } from "@/components/drawers/wallet-drawer";
 import { ReferralsDrawer } from "@/components/drawers/referrals-drawer";
 import { UGCDrawer } from "@/components/drawers/ugc-drawer";
@@ -23,6 +26,7 @@ import { MyOrdersDrawer } from "@/components/drawers/my-orders-drawer";
 import { MyEventsDrawer } from "@/components/drawers/my-events-drawer";
 import { AdminChallengeModal } from "@/components/drawers/admin-challenge-modal";
 import { SettingsDrawer } from "@/components/drawers/settings-drawer";
+import { BrandCareerDrawer } from "@/components/drawers/brand-career-drawer";
 import { AdminReview } from "@/components/admin-review";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { SmartOnboarding } from "@/components/smart-onboarding";
@@ -160,12 +164,13 @@ export default function Page() {
 
   const drawerLabels: Record<ProfileDrawerKey, string> = {
     wallet: "My Wallet & Earnings",
-    verification: "Verification & Elite",
+    verification: VERIFICATION_DRAWER_PAGE_TITLE,
     elite: "Elite Tracks",
     ugc: "Submit UGC",
     orders: "My Orders",
     events: "My Events",
     referrals: "Invite Friends",
+    brand_career: "Axelerate Career",
     settings: "Settings",
   };
 
@@ -188,7 +193,7 @@ export default function Page() {
       case "verification":
         return <VerificationDrawer />;
       case "elite":
-        return <EliteTracksDrawer />;
+        return SHOW_ELITE_TRACKS_DRAWER ? <EliteTracksDrawer /> : null;
       case "ugc":
         // completed/paid: Brand Co-Creations status; otherwise submit flow
         return isViewUGCStatus ? (
@@ -215,6 +220,8 @@ export default function Page() {
         return <MyEventsDrawer onExploreEvents={handleNavigateToEvents} />;
       case "referrals":
         return <ReferralsDrawer />;
+      case "brand_career":
+        return <BrandCareerDrawer />;
       case "settings":
         return (
           <SettingsDrawer onRequestAdminAccess={handleRequestAdminFromSettings} />

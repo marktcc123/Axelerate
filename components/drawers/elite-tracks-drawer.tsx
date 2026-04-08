@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppDataContext } from "@/lib/context/app-data-context";
-import { TIER_CONFIG } from "@/lib/types";
+import { TIER_CONFIG, resolveTierKey } from "@/lib/types";
 
 const MOCK_SHIFTS = [
   { id: "s1", title: "Jewelry Pop-Up Staff", brand: "Mejuri", location: "The Grove, LA", date: "Sat, Feb 22", startTime: "2:00 PM", endTime: "6:00 PM", hourlyRate: 35, spotsLeft: 2, totalSpots: 4, status: "open" as const },
@@ -26,8 +26,8 @@ export function EliteTracksDrawer() {
   const { user, profile } = useAppDataContext();
   const [claimedIds, setClaimedIds] = useState<Set<string>>(new Set());
 
-  const userTier = profile?.tier ?? "guest";
-  const isUnlocked = ["staff", "city_manager", "partner"].includes(userTier);
+  const tierKey = resolveTierKey(profile?.tier ?? "guest");
+  const isUnlocked = ["staff", "city_manager", "partner"].includes(tierKey);
 
   if (!user) {
     return (
@@ -47,11 +47,17 @@ export function EliteTracksDrawer() {
           Elite Tracks Locked
         </h3>
         <p className="mb-6 max-w-xs text-sm text-muted-foreground">
-          Reach <span className="font-bold text-brand-primary">Staff</span> or <span className="font-bold text-brand-primary">Partner</span> tier to unlock high-paying event shifts ($30+/hr).
+          Reach{" "}
+          <span className="font-bold text-brand-primary">{TIER_CONFIG.staff.label}</span>
+          {", "}
+          <span className="font-bold text-brand-primary">{TIER_CONFIG.city_manager.label}</span>
+          {", or "}
+          <span className="font-bold text-brand-primary">{TIER_CONFIG.partner.label}</span>{" "}
+          to unlock high-paying event shifts ($30+/hr).
         </p>
-        <div className="rounded-xl border border-border bg-card px-4 py-3 text-left">
+        <div className="w-full max-w-xs rounded-xl border border-border bg-card px-4 py-3 text-center">
           <p className="text-xs font-bold text-muted-foreground">Your current tier</p>
-          <p className="text-sm font-black text-foreground">{TIER_CONFIG[userTier].label}</p>
+          <p className="text-sm font-black text-foreground">{TIER_CONFIG[tierKey].label}</p>
         </div>
       </div>
     );
@@ -70,7 +76,7 @@ export function EliteTracksDrawer() {
           Elite Tracks
         </h1>
         <p className="text-sm text-muted-foreground">
-          High-paying event shifts for verified staff
+          High-paying event shifts for {TIER_CONFIG.staff.label} tier and above
         </p>
       </header>
 

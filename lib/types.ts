@@ -30,6 +30,10 @@ export interface Brand {
   is_featured: boolean;
   description?: string | null;
   category?: string | null;
+  /** Admin: show brand internship proof card in Axelerate Career when user qualifies */
+  career_internship_proof_enabled?: boolean;
+  /** Admin: show brand referral lane in Axelerate Career when user qualifies */
+  career_referral_enabled?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -228,6 +232,8 @@ export interface Profile {
   followed_brands_list?: string | null;
   /** verification: answered_questions */
   interview_answers?: string | null;
+  /** Public LinkedIn profile URL (career drawer share / open) */
+  linkedin_url?: string | null;
   /** 收货地址 JSON */
   shipping_address?: ShippingAddressJson | Record<string, unknown> | null;
   created_at?: string;

@@ -4,7 +4,7 @@ import type { ElementType } from "react";
 import {
   User,
   DollarSign,
-  Shield,
+  ShieldCheck,
   Video,
   Gift,
   Settings,
@@ -13,6 +13,7 @@ import {
   LogOut,
   Package,
   CalendarDays,
+  TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
@@ -26,7 +27,11 @@ export type ProfileDrawerKey =
   | "orders"
   | "events"
   | "referrals"
+  | "brand_career"
   | "settings";
+
+/** Set to true to show the Elite Tracks menu row and drawer again. */
+export const SHOW_ELITE_TRACKS_DRAWER = false;
 
 import { resolveTierKey, type Profile } from "@/lib/types";
 import { schoolToConfig } from "@/lib/constants/schools";
@@ -53,11 +58,12 @@ const MENU_SECTIONS: { title: string; items: MenuRow[] }[] = [
   {
     title: "Grow & earn",
     items: [
-      { key: "verification", label: "Verification & Elite Status", icon: Shield },
+      { key: "verification", label: "Verification", icon: ShieldCheck },
       { key: "elite", label: "Elite Tracks", icon: Zap },
       { key: "ugc", label: "Brand Co-Creations", icon: Video },
       { key: "events", label: "My Events", icon: CalendarDays },
       { key: "referrals", label: "Invite Friends", icon: Gift },
+      { key: "brand_career", label: "Axelerate Career", icon: TrendingUp },
     ],
   },
   {
@@ -198,13 +204,18 @@ export function UserProfile({ user, profile: contextProfile, isLoadingProfile, o
       </div>
 
       <div className="flex flex-col gap-6">
-        {MENU_SECTIONS.map((section) => (
+        {MENU_SECTIONS.map((section) => {
+          const items =
+            SHOW_ELITE_TRACKS_DRAWER
+              ? section.items
+              : section.items.filter((i) => i.key !== "elite");
+          return (
           <div key={section.title}>
             <h2 className="mb-2 px-1 text-xs font-semibold tracking-tight text-foreground">
               {section.title}
             </h2>
             <div className="overflow-hidden rounded-2xl border-2 border-border bg-card shadow-sm dark:border-white/10 dark:bg-white/[0.03]">
-              {section.items.map((item, index) => {
+              {items.map((item, index) => {
                 const Icon = item.icon;
                 return (
                   <button
@@ -228,7 +239,8 @@ export function UserProfile({ user, profile: contextProfile, isLoadingProfile, o
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <button

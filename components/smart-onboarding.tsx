@@ -34,7 +34,7 @@ const STEPS = [
     kicker: "STEP 01 — UNLOCK YOUR ACCESS",
     title: "GET CAMPUS VERIFIED.",
     body: "Welcome to the exclusive network. To unlock premium brand collabs and high-value drops, we need to know you're really on campus. Get verified to lift the gates and upgrade your tier.",
-    hint: "Profile tab (bottom right) → Verification & Elite Status. Knock this out first to experience the full Axelerate ecosystem.",
+    hint: "Profile tab (bottom right) → Verification. Knock this out first to experience the full Axelerate ecosystem.",
   },
   {
     id: "feed",

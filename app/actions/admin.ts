@@ -10,6 +10,11 @@ import { ORDERS_COLUMNS_MIN, ORDERS_SELECT_WITH_PROFILE } from "@/lib/orders-sel
 import type { OrderItemRaw } from "@/lib/types";
 import { resolveTierKey } from "@/lib/types";
 import { promoteTierForXp } from "@/lib/tier-progress";
+import {
+  careerRewardNeedsCertificatePdf,
+  careerRewardSummaryLabel,
+  parseCareerRewardKey,
+} from "@/lib/career-rewards";
 
 /** 获取当前登录用户 ID（审批人） */
 async function getActorId(): Promise<string | null> {
@@ -62,6 +67,20 @@ export type PendingW9ReviewRow = {
   w9_document_path: string | null;
 };
 
+export type PendingCareerRewardRow = {
+  id: string;
+  user_id: string;
+  reward_key: string;
+  claimed_at: string;
+  status: string;
+  certificate_pdf_path: string | null;
+  /** Mirrors `brand:{uuid}:*` when set (migration 00038 + inserts). */
+  brand_id: string | null;
+  /** Resolved with `brands.name` for admin UI. */
+  reward_summary: string;
+  profile?: { full_name: string | null } | null;
+};
+
 export interface AdminDashboardData {
   /** 待发货（processing 且未处于取消申请审核中） */
   pendingOrders: any[];
@@ -74,6 +93,7 @@ export interface AdminDashboardData {
   pendingWithdrawals: any[];
   /** 已上传 W-9 但未核验 is_w9_verified */
   pendingW9Reviews: PendingW9ReviewRow[];
+  pendingCareerRewards: PendingCareerRewardRow[];
   pendingUGC: any[];
   reviewedUGC: any[];
   ugcData: any[];
@@ -97,6 +117,8 @@ export async function getAdminDashboardData(): Promise<AdminDashboardData> {
     ugcRes,
     eventsAllRes,
     w9PendingRes,
+    careerPendingRes,
+    brandsRes,
   ] = await Promise.all([
     supabase
       .from("orders")
@@ -139,6 +161,14 @@ export async function getAdminDashboardData(): Promise<AdminDashboardData> {
       .not("w9_submitted_at", "is", null)
       .eq("is_w9_verified", false)
       .order("w9_submitted_at", { ascending: false }),
+    supabase
+      .from("career_rewards")
+      .select(
+        "id, user_id, reward_key, claimed_at, status, certificate_pdf_path, profile:profiles!career_rewards_user_id_fkey(full_name)",
+      )
+      .eq("status", "pending")
+      .order("claimed_at", { ascending: true }),
+    supabase.from("brands").select("id, name").order("name"),
   ]);
 
   // 联表 profile 或多余列失败时，降级为最小列集，避免 Dashboard 待发货列表整段为空
@@ -175,6 +205,15 @@ export async function getAdminDashboardData(): Promise<AdminDashboardData> {
       "[admin] pending W-9 reviews select failed (run migration 00028_w9_storage_and_profiles.sql):",
       w9PendingRes.error.message
     );
+  }
+  if (careerPendingRes.error) {
+    console.warn(
+      "[admin] pending career rewards select failed (run migration 00037):",
+      careerPendingRes.error.message
+    );
+  }
+  if (brandsRes.error) {
+    console.warn("[admin] brands list for career labels failed:", brandsRes.error.message);
   }
 
   if (ordersRes.error) {
@@ -373,6 +412,37 @@ export async function getAdminDashboardData(): Promise<AdminDashboardData> {
     pendingW9Reviews: w9PendingRes.error
       ? []
       : ((w9PendingRes.data ?? []) as PendingW9ReviewRow[]),
+    pendingCareerRewards: careerPendingRes.error
+      ? []
+      : (() => {
+          const brandNameById = new Map<string, string>();
+          if (!brandsRes.error && brandsRes.data) {
+            for (const b of brandsRes.data as { id: string; name: string | null }[]) {
+              brandNameById.set(
+                String(b.id).toLowerCase(),
+                (b.name ?? "").trim() || "Unnamed brand",
+              );
+            }
+          }
+          return (careerPendingRes.data ?? []).map((r: any): PendingCareerRewardRow => {
+            let profile = r.profile as PendingCareerRewardRow["profile"];
+            if (Array.isArray(profile)) profile = profile[0] ?? null;
+            const rewardKey = String(r.reward_key ?? "");
+            const parsedBrand = parseCareerRewardKey(rewardKey);
+            return {
+              id: r.id,
+              user_id: r.user_id,
+              reward_key: rewardKey,
+              claimed_at: r.claimed_at,
+              status: r.status,
+              certificate_pdf_path: r.certificate_pdf_path ?? null,
+              brand_id:
+                parsedBrand?.kind === "brand" ? parsedBrand.brandId : null,
+              reward_summary: careerRewardSummaryLabel(rewardKey, brandNameById),
+              profile,
+            };
+          });
+        })(),
     pendingUGC: awaitingReview,
     reviewedUGC,
     ugcData,
@@ -1322,6 +1392,156 @@ export async function adminApproveProfileW9(
   }
 
   await insertAuditLog("profile", uid, "w9_verified", actorId);
+  revalidatePath("/");
+  return { success: true };
+}
+
+const CAREER_CERT_BUCKET = "career-certificates";
+
+export async function adminListBrandsCareerFlags(): Promise<
+  {
+    id: string;
+    name: string;
+    career_internship_proof_enabled: boolean;
+    career_referral_enabled: boolean;
+  }[]
+> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("brands")
+    .select("id, name, career_internship_proof_enabled, career_referral_enabled")
+    .order("name");
+  if (error) {
+    console.error("[admin] adminListBrandsCareerFlags", error);
+    return [];
+  }
+  return (data ?? []).map((r: any) => ({
+    id: r.id,
+    name: r.name ?? "Brand",
+    career_internship_proof_enabled: !!r.career_internship_proof_enabled,
+    career_referral_enabled: !!r.career_referral_enabled,
+  }));
+}
+
+export async function adminUpdateBrandCareerFlags(
+  brandId: string,
+  internship: boolean,
+  referral: boolean,
+): Promise<{ success: true } | { success: false; error: string }> {
+  const id = brandId?.trim();
+  if (!id) return { success: false, error: "Brand id required" };
+  const supabase = createAdminClient();
+  const { error } = await supabase
+    .from("brands")
+    .update({
+      career_internship_proof_enabled: internship,
+      career_referral_enabled: referral,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  if (error) {
+    if (String(error.message).includes("career_")) {
+      return {
+        success: false,
+        error: "Run migration 00037 for brand career columns.",
+      };
+    }
+    return { success: false, error: error.message };
+  }
+  const actorId = await getActorId();
+  await insertAuditLog("brand", id, "career_flags_updated", actorId);
+  revalidatePath("/");
+  return { success: true };
+}
+
+export async function adminApproveCareerReward(
+  rewardId: string,
+  formData: FormData,
+): Promise<{ success: true } | { success: false; error: string }> {
+  const rid = rewardId?.trim();
+  if (!rid) return { success: false, error: "Reward id required" };
+
+  const supabase = createAdminClient();
+  const { data: row, error: fetchErr } = await supabase
+    .from("career_rewards")
+    .select("id, user_id, reward_key, status")
+    .eq("id", rid)
+    .maybeSingle();
+
+  if (fetchErr || !row) {
+    return { success: false, error: "Request not found." };
+  }
+  if (row.status !== "pending") {
+    return { success: false, error: "Not pending." };
+  }
+
+  const needsPdf = careerRewardNeedsCertificatePdf(row.reward_key);
+  const file = formData.get("certificate") as File | null;
+  let pdfPath: string | null = null;
+
+  if (needsPdf) {
+    if (!file || file.size === 0) {
+      return { success: false, error: "Upload a PDF certificate." };
+    }
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      return { success: false, error: "File must be a PDF." };
+    }
+    const buf = Buffer.from(await file.arrayBuffer());
+    pdfPath = `${row.user_id}/${rid}.pdf`;
+    const { error: upErr } = await supabase.storage
+      .from(CAREER_CERT_BUCKET)
+      .upload(pdfPath, buf, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+    if (upErr) {
+      console.error("[admin] career cert upload", upErr);
+      return { success: false, error: upErr.message };
+    }
+  }
+
+  const actorId = await getActorId();
+  const { error: updErr } = await supabase
+    .from("career_rewards")
+    .update({
+      status: "approved",
+      certificate_pdf_path: pdfPath,
+      reviewed_at: new Date().toISOString(),
+      reviewed_by: actorId,
+    })
+    .eq("id", rid);
+
+  if (updErr) {
+    return { success: false, error: updErr.message };
+  }
+
+  await insertAuditLog("career_reward", rid, "approved", actorId);
+  revalidatePath("/");
+  return { success: true };
+}
+
+export async function adminRejectCareerReward(
+  rewardId: string,
+): Promise<{ success: true } | { success: false; error: string }> {
+  const rid = rewardId?.trim();
+  if (!rid) return { success: false, error: "Reward id required" };
+  const supabase = createAdminClient();
+  const { data: row } = await supabase
+    .from("career_rewards")
+    .select("id, certificate_pdf_path")
+    .eq("id", rid)
+    .maybeSingle();
+  if (!row) return { success: false, error: "Not found." };
+
+  if (row.certificate_pdf_path) {
+    await supabase.storage.from(CAREER_CERT_BUCKET).remove([row.certificate_pdf_path]);
+  }
+
+  const { error } = await supabase.from("career_rewards").delete().eq("id", rid);
+  if (error) return { success: false, error: error.message };
+
+  const actorId = await getActorId();
+  await insertAuditLog("career_reward", rid, "rejected_deleted", actorId);
   revalidatePath("/");
   return { success: true };
 }

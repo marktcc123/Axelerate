@@ -25,6 +25,7 @@ import {
   RotateCcw,
   Ban,
   User,
+  Briefcase,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -56,8 +57,13 @@ import {
   markEventAttended,
   adminGetW9SignedUrl,
   adminApproveProfileW9,
+  adminApproveCareerReward,
+  adminRejectCareerReward,
+  adminListBrandsCareerFlags,
+  adminUpdateBrandCareerFlags,
   type AuditEntry,
   type PendingW9ReviewRow,
+  type PendingCareerRewardRow,
 } from "@/app/actions/admin";
 import { formatShippingAddressPayload } from "@/lib/format-shipping-address";
 import type { School } from "@/lib/schools";
@@ -70,6 +76,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { careerRewardNeedsCertificatePdf } from "@/lib/career-rewards";
 import { toast } from "sonner";
 import {
   ComposedChart,
@@ -85,7 +93,15 @@ import {
   Cell,
 } from "recharts";
 
-type AdminTab = "analytics" | "tasks" | "ugc" | "physical" | "events" | "withdrawals" | "campuses";
+type AdminTab =
+  | "analytics"
+  | "tasks"
+  | "ugc"
+  | "physical"
+  | "events"
+  | "withdrawals"
+  | "campuses"
+  | "career";
 
 const STATUS_FILTERS = [
   "ALL",
@@ -177,6 +193,15 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
   const [orders, setOrders] = useState<any[]>([]);
   const [pendingCancelRequests, setPendingCancelRequests] = useState<any[]>([]);
   const [pendingReturns, setPendingReturns] = useState<any[]>([]);
+  const [pendingCareerRewards, setPendingCareerRewards] = useState<PendingCareerRewardRow[]>([]);
+  const [careerBrands, setCareerBrands] = useState<
+    Awaited<ReturnType<typeof adminListBrandsCareerFlags>>
+  >([]);
+  const [loadingCareerBrands, setLoadingCareerBrands] = useState(false);
+  const [careerApprovingId, setCareerApprovingId] = useState<string | null>(null);
+  const [careerRejectingId, setCareerRejectingId] = useState<string | null>(null);
+  /** English UI for file picker (OS locale otherwise shows e.g. Chinese on the native control). */
+  const [careerCertFileLabel, setCareerCertFileLabel] = useState<Record<string, string>>({});
   const [orderProducts, setOrderProducts] = useState<any[]>([]);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [returnActionId, setReturnActionId] = useState<string | null>(null);
@@ -218,6 +243,7 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
       setEventApplications(data.pendingEventApplications);
       setWithdrawals(data.pendingWithdrawals);
       setPendingW9Reviews(data.pendingW9Reviews ?? []);
+      setPendingCareerRewards(data.pendingCareerRewards ?? []);
       setUgcData(data.ugcData ?? []);
       setPhysicalData([...(data.pendingPhysical ?? []), ...(data.reviewedPhysical ?? [])]);
       setEventsData([...(data.pendingEvents ?? []), ...(data.reviewedEvents ?? [])]);
@@ -239,6 +265,14 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
         setLoadingSchools(false);
       });
     }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "career") return;
+    setLoadingCareerBrands(true);
+    adminListBrandsCareerFlags()
+      .then((rows) => setCareerBrands(rows))
+      .finally(() => setLoadingCareerBrands(false));
   }, [activeTab]);
 
   useEffect(() => {
@@ -586,6 +620,18 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
         >
           <Building2 className="h-3.5 w-3.5" />
           Campuses
+        </button>
+        <button
+          onClick={() => setActiveTab("career")}
+          className={cn(
+            "flex items-center gap-2 rounded-full px-4 py-2 text-[11px] font-bold uppercase tracking-wider transition-all",
+            activeTab === "career"
+              ? "bg-[var(--theme-primary)] text-white"
+              : "border-2 border-border bg-muted/40 text-muted-foreground dark:border-white/20 dark:bg-white/5 hover:border-[var(--theme-primary)]/50 hover:text-[var(--theme-primary)]"
+          )}
+        >
+          <Briefcase className="h-3.5 w-3.5" />
+          Career
         </button>
       </div>
 
@@ -1692,6 +1738,232 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === "career" && (
+        <div className="space-y-8">
+          <div>
+            <h2 className="mb-3 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+              Pending career requests
+            </h2>
+            {loadingDashboard ? (
+              <div className="flex justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-[var(--theme-primary)]" />
+              </div>
+            ) : pendingCareerRewards.length === 0 ? (
+              <p className="rounded-2xl border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
+                No pending certificate or referral requests.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {pendingCareerRewards.map((row) => {
+                  const needsPdf = careerRewardNeedsCertificatePdf(row.reward_key);
+                  return (
+                    <div
+                      key={row.id}
+                      className="rounded-2xl border border-border bg-card p-4 dark:border-white/10"
+                    >
+                      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="font-bold text-foreground">
+                            {row.profile?.full_name?.trim() || "User"}{" "}
+                            <span className="font-mono text-xs font-normal text-muted-foreground">
+                              ({row.user_id.slice(0, 8)}…)
+                            </span>
+                          </p>
+                          <p className="mt-1 text-sm font-semibold text-[var(--theme-primary)]">
+                            {row.reward_summary}
+                          </p>
+                          <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                            {row.reward_key}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            Submitted {new Date(row.claimed_at).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                      <form
+                        className="flex flex-col gap-3 border-t border-border pt-3 dark:border-white/10"
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          const fd = new FormData(e.currentTarget);
+                          setCareerApprovingId(row.id);
+                          const res = await adminApproveCareerReward(row.id, fd);
+                          setCareerApprovingId(null);
+                          if (res.success) {
+                            toast.success("Approved");
+                            setPendingCareerRewards((prev) => prev.filter((r) => r.id !== row.id));
+                          } else {
+                            toast.error(res.error);
+                          }
+                        }}
+                      >
+                        {needsPdf ? (
+                          <div lang="en">
+                            <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                              Certificate PDF (required)
+                            </p>
+                            <div className="flex flex-wrap items-center gap-3">
+                              <input
+                                id={`career-cert-${row.id}`}
+                                type="file"
+                                name="certificate"
+                                accept=".pdf,application/pdf"
+                                required
+                                className="sr-only"
+                                onChange={(e) => {
+                                  const name = e.target.files?.[0]?.name ?? "";
+                                  setCareerCertFileLabel((prev) => ({ ...prev, [row.id]: name }));
+                                }}
+                              />
+                              <label
+                                htmlFor={`career-cert-${row.id}`}
+                                className="inline-flex cursor-pointer items-center rounded-lg bg-[var(--theme-primary)] px-3 py-1.5 text-xs font-bold text-white transition-opacity hover:opacity-90"
+                              >
+                                Choose file
+                              </label>
+                              <span className="text-xs text-muted-foreground">
+                                {careerCertFileLabel[row.id]?.trim()
+                                  ? careerCertFileLabel[row.id]
+                                  : "No file chosen"}
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            Referral lane — no PDF upload. Approve to mark as fulfilled.
+                          </p>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="submit"
+                            disabled={careerApprovingId === row.id || careerRejectingId === row.id}
+                            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold uppercase tracking-wider text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                          >
+                            {careerApprovingId === row.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="h-4 w-4" />
+                            )}
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={careerApprovingId === row.id || careerRejectingId === row.id}
+                            onClick={async () => {
+                              if (!confirm("Reject and remove this request? The user can submit again."))
+                                return;
+                              setCareerRejectingId(row.id);
+                              const res = await adminRejectCareerReward(row.id);
+                              setCareerRejectingId(null);
+                              if (res.success) {
+                                toast.success("Rejected");
+                                setPendingCareerRewards((prev) => prev.filter((r) => r.id !== row.id));
+                              } else {
+                                toast.error(res.error);
+                              }
+                            }}
+                            className="inline-flex items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-2 text-xs font-bold uppercase tracking-wider text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-50"
+                          >
+                            {careerRejectingId === row.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <XCircle className="h-4 w-4" />
+                            )}
+                            Reject
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h2 className="mb-3 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+              Brand career visibility
+            </h2>
+            <p className="mb-4 text-xs text-muted-foreground">
+              When unchecked, users will not see that brand&apos;s internship certificate or referral
+              cards in Axelerate Career.
+            </p>
+            {loadingCareerBrands ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">Loading brands…</div>
+            ) : careerBrands.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No brands found.</p>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-border dark:border-white/10">
+                <table className="w-full min-w-[480px] text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/40 dark:border-white/10">
+                      <th className="px-4 py-3 font-bold text-foreground">Brand</th>
+                      <th className="px-4 py-3 font-bold text-foreground">Internship proof</th>
+                      <th className="px-4 py-3 font-bold text-foreground">Referral</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {careerBrands.map((b) => (
+                      <tr
+                        key={b.id}
+                        className="border-b border-border last:border-0 dark:border-white/10"
+                      >
+                        <td className="px-4 py-3 font-medium text-foreground">{b.name}</td>
+                        <td className="px-4 py-3">
+                          <Checkbox
+                            checked={b.career_internship_proof_enabled}
+                            onCheckedChange={async (v) => {
+                              const internship = v === true;
+                              const res = await adminUpdateBrandCareerFlags(
+                                b.id,
+                                internship,
+                                b.career_referral_enabled,
+                              );
+                              if (res.success) {
+                                toast.success("Updated");
+                                setCareerBrands((prev) =>
+                                  prev.map((x) =>
+                                    x.id === b.id ? { ...x, career_internship_proof_enabled: internship } : x,
+                                  ),
+                                );
+                              } else {
+                                toast.error(res.error);
+                              }
+                            }}
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <Checkbox
+                            checked={b.career_referral_enabled}
+                            onCheckedChange={async (v) => {
+                              const referral = v === true;
+                              const res = await adminUpdateBrandCareerFlags(
+                                b.id,
+                                b.career_internship_proof_enabled,
+                                referral,
+                              );
+                              if (res.success) {
+                                toast.success("Updated");
+                                setCareerBrands((prev) =>
+                                  prev.map((x) =>
+                                    x.id === b.id ? { ...x, career_referral_enabled: referral } : x,
+                                  ),
+                                );
+                              } else {
+                                toast.error(res.error);
+                              }
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

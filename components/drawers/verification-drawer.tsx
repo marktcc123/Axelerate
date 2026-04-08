@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ChevronRight, CheckCircle2, Sparkles, ChevronDown, Loader2 } from "lucide-react";
+import { ChevronRight, CheckCircle2, ShieldCheck, ChevronDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { useAppDataContext } from "@/lib/context/app-data-context";
@@ -14,6 +14,9 @@ import {
 } from "@/lib/types";
 import { syncVerificationStep } from "@/app/actions/user";
 import { toast } from "sonner";
+
+/** Same string as the profile shell `DrawerTitle` in `app/page.tsx`. */
+export const VERIFICATION_DRAWER_PAGE_TITLE = "Verification";
 
 function getSteps(profile: Profile | null): VerificationSteps {
   const raw = profile?.verification_steps;
@@ -84,10 +87,10 @@ export function VerificationDrawer() {
       <div className="mb-6 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-5">
         <div className="mb-3 flex items-center gap-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-primary/20">
-            <Sparkles className="h-5 w-5 text-brand-primary" />
+            <ShieldCheck className="h-5 w-5 text-brand-primary" aria-hidden />
           </div>
           <h3 className="text-lg font-black uppercase tracking-tight text-foreground">
-            Verify your profile
+            {VERIFICATION_DRAWER_PAGE_TITLE}
           </h3>
         </div>
         <div className="relative mb-4">

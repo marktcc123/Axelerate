@@ -23,6 +23,7 @@ export function SettingsDrawer({
   const [appTheme, setAppTheme] = useState(DEFAULT_THEME_LABEL);
   const [tiktokHandle, setTiktokHandle] = useState("");
   const [igHandle, setIgHandle] = useState("");
+  const [linkedinUrl, setLinkedinUrl] = useState("");
   const [saving, setSaving] = useState(false);
 
   const supabase = createClient();
@@ -33,6 +34,7 @@ export function SettingsDrawer({
       setAppTheme(profile.app_theme ?? DEFAULT_THEME_LABEL);
       setTiktokHandle(profile.tiktok_handle ?? "");
       setIgHandle(profile.ig_handle ?? "");
+      setLinkedinUrl(profile.linkedin_url ?? "");
     }
   }, [profile]);
 
@@ -63,6 +65,7 @@ export function SettingsDrawer({
         app_theme: effectiveAppTheme,
         tiktok_handle: tiktokHandle.trim() || null,
         ig_handle: igHandle.trim() || null,
+        linkedin_url: linkedinUrl.trim() || null,
       })
       .eq("id", user.id);
 
@@ -169,6 +172,21 @@ export function SettingsDrawer({
                 placeholder="@username"
                 className={inputClass}
               />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+                LinkedIn profile URL
+              </label>
+              <input
+                type="url"
+                value={linkedinUrl}
+                onChange={(e) => setLinkedinUrl(e.target.value)}
+                placeholder="https://linkedin.com/in/your-profile"
+                className={inputClass}
+              />
+              <p className="mt-1.5 text-[10px] text-muted-foreground">
+                Used for the Axelerate Career LinkedIn button after your certificate is approved.
+              </p>
             </div>
           </div>
         </div>
