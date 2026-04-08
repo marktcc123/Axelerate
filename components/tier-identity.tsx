@@ -59,7 +59,11 @@ export function tierGlyphVisualClass(tier: UserTier): string {
     case "guest":
       return "text-muted-foreground";
     case "student":
-      return "text-brand-primary";
+      return cn(
+        "text-brand-primary",
+        "drop-shadow-[0_0.5px_0_rgba(255,255,255,0.5)]",
+        "dark:drop-shadow-[0_1px_1px_rgba(0,0,0,0.75)]",
+      );
     case "staff":
       return "text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.35)]";
     case "city_manager":
@@ -81,9 +85,12 @@ export function tierBadgeShellClass(tier: UserTier): string {
       );
     case "student":
       return cn(
-        "border border-brand-primary/40 bg-brand-primary/[0.12] text-brand-primary",
-        "shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
-        "dark:border-brand-primary/45 dark:bg-brand-primary/15",
+        "border border-brand-primary/50 text-brand-primary",
+        /* Solid panel so label + icon stay readable on busy avatars / photos */
+        "bg-white/95 backdrop-blur-sm",
+        "shadow-[0_2px_12px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.85)]",
+        "dark:border-brand-primary/55 dark:bg-zinc-950/95 dark:backdrop-blur-sm",
+        "dark:shadow-[0_2px_14px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.06)]",
       );
     case "staff":
       return cn(
@@ -114,7 +121,11 @@ export function tierBadgeLabelClass(tier: UserTier): string {
     case "guest":
       return "font-mono font-bold uppercase tracking-widest text-muted-foreground";
     case "student":
-      return "font-mono font-bold uppercase tracking-wider text-brand-primary";
+      return cn(
+        "font-mono font-bold uppercase tracking-wider text-brand-primary",
+        "drop-shadow-[0_1px_0_rgba(255,255,255,0.65)]",
+        "dark:drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)]",
+      );
     case "staff":
       return cn(
         "font-mono font-bold uppercase tracking-widest text-white",
