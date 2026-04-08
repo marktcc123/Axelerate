@@ -36,10 +36,11 @@ import { useAppDataContext } from "@/lib/context/app-data-context";
 import {
   canAccessTier,
   TIER_CONFIG,
-  getNextTierXp,
+  resolveTierKey,
 } from "@/lib/types";
 import type { Product, UserTier } from "@/lib/types";
 import { TierBadge } from "./tier-badge";
+import { TierXpProgress } from "./tier-xp-progress";
 import { Skeleton } from "./ui/skeleton";
 import { Checkbox } from "./ui/checkbox";
 import { Label } from "./ui/label";
@@ -56,6 +57,14 @@ import { useSearchParams, useRouter } from "next/navigation";
 
 const CATEGORIES = ["All", "Beauty", "Food", "Apparel", "Drops"] as const;
 type CategoryTab = (typeof CATEGORIES)[number];
+
+/** After migration 00035, driven by DB column; before migration, falls back to is_drop / drop_time. */
+function productShowsInFridayNightBanner(p: Product): boolean {
+  if (typeof p.show_in_friday_night_drop === "boolean") {
+    return p.show_in_friday_night_drop;
+  }
+  return p.is_drop === true || p.drop_time != null;
+}
 
 function useCountdown(targetDate: string | null) {
   const [timeLeft, setTimeLeft] = useState({ d: 0, h: 0, m: 0, s: 0 });
@@ -90,16 +99,54 @@ function DropZoneBanner({
   onAddToCart: (p: Product) => void;
   userTier: UserTier;
 }) {
-  const dropProducts = products.filter(
-    (p) => p.is_drop === true || p.drop_time != null
+  const dropProducts = useMemo(() => {
+    const list = products.filter(productShowsInFridayNightBanner);
+    return [...list].sort((a, b) => {
+      const ta = a.drop_time ? new Date(a.drop_time).getTime() : Infinity;
+      const tb = b.drop_time ? new Date(b.drop_time).getTime() : Infinity;
+      if (ta !== tb) return ta - tb;
+      return (a.title ?? "").localeCompare(b.title ?? "");
+    });
+  }, [products]);
+
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [pauseCarousel, setPauseCarousel] = useState(false);
+
+  const countdownTarget = useMemo(() => {
+    const current = dropProducts[activeIdx] ?? dropProducts[0];
+    return current?.drop_time ?? null;
+  }, [dropProducts, activeIdx]);
+
+  const time = useCountdown(countdownTarget);
+
+  const dropIds = useMemo(
+    () => dropProducts.map((p) => p.id).join(","),
+    [dropProducts]
   );
-  const nextDrop = dropProducts[0] ?? null;
-  const time = useCountdown(nextDrop?.drop_time ?? null);
-  const topDrop = dropProducts.find((p) => p.is_drop === true || p.drop_time) ?? nextDrop;
+
+  useEffect(() => {
+    setActiveIdx(0);
+  }, [dropIds]);
+
+  useEffect(() => {
+    if (dropProducts.length <= 1) return;
+    if (pauseCarousel) return;
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+    const t = setInterval(() => {
+      setActiveIdx((i) => (i + 1) % dropProducts.length);
+    }, 4500);
+    return () => clearInterval(t);
+  }, [dropProducts.length, pauseCarousel, dropIds]);
 
   if (dropProducts.length === 0) return null;
 
-  const accessible = topDrop ? canAccessTier(userTier, topDrop.min_tier_required) : false;
+  const currentDrop = dropProducts[activeIdx] ?? dropProducts[0];
+  const accessible = canAccessTier(userTier, currentDrop.min_tier_required);
 
   return (
     <div className="mb-6 overflow-hidden rounded-2xl border-2 border-brand-primary/30 bg-card shadow-md backdrop-blur-sm dark:bg-zinc-900/80">
@@ -133,12 +180,19 @@ function DropZoneBanner({
           ))}
         </div>
 
-        {topDrop && (
-          <div className="flex items-center gap-4 rounded-xl border border-brand-primary/20 bg-brand-primary/5 p-4">
+        <div
+          className="rounded-xl border border-brand-primary/20 bg-brand-primary/5 p-4"
+          onMouseEnter={() => setPauseCarousel(true)}
+          onMouseLeave={() => setPauseCarousel(false)}
+        >
+          <div
+            key={currentDrop.id}
+            className="flex animate-in fade-in duration-300 items-center gap-4"
+          >
             <div className="flex h-20 w-20 shrink-0 overflow-hidden rounded-xl border-2 border-border bg-muted/50 backdrop-blur-md dark:border-white/10 dark:bg-white/5">
-              {topDrop.image_url ? (
+              {currentDrop.image_url ? (
                 <img
-                  src={topDrop.image_url}
+                  src={currentDrop.image_url}
                   alt=""
                   className="h-full w-full object-cover"
                 />
@@ -150,40 +204,72 @@ function DropZoneBanner({
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-black text-foreground dark:text-white">
-                {topDrop.title}
+                {currentDrop.title}
               </p>
               <p className="text-xs text-muted-foreground">
-                {topDrop.brand?.name ?? "—"}
+                {currentDrop.brand?.name ?? "—"}
               </p>
               <div className="mt-2 flex items-center gap-2">
                 <span className="text-lg font-black text-brand-primary">
-                  ${Number(topDrop.discount_price ?? topDrop.original_price ?? topDrop.price_credits)}
+                  $
+                  {Number(
+                    currentDrop.discount_price ??
+                      currentDrop.original_price ??
+                      currentDrop.price_credits
+                  )}
                 </span>
-                {topDrop.original_price != null && topDrop.original_price > 0 && (
-                  <span className="text-sm text-muted-foreground line-through">
-                    ${topDrop.original_price}
-                  </span>
-                )}
+                {currentDrop.original_price != null &&
+                  currentDrop.original_price > 0 && (
+                    <span className="text-sm text-muted-foreground line-through">
+                      ${currentDrop.original_price}
+                    </span>
+                  )}
               </div>
             </div>
             <button
+              type="button"
               onClick={() => {
-                if (accessible && topDrop.stock_count > 0) {
-                  onAddToCart(topDrop);
+                if (accessible && currentDrop.stock_count > 0) {
+                  onAddToCart(currentDrop);
                 }
               }}
-              disabled={!accessible || topDrop.stock_count === 0}
+              disabled={!accessible || currentDrop.stock_count === 0}
               className={cn(
                 "shrink-0 rounded-xl px-4 py-2.5 text-xs font-bold uppercase tracking-wider transition-all active:scale-95",
-                accessible && topDrop.stock_count > 0
+                accessible && currentDrop.stock_count > 0
                   ? "bg-brand-primary text-white shadow-[0_0_20px_rgba(var(--theme-primary-rgb),0.4)] hover:bg-brand-primary"
                   : "border-2 border-border bg-muted text-muted-foreground dark:border-transparent dark:bg-white/5"
               )}
             >
-              {topDrop.stock_count === 0 ? "Sold Out" : "Grab It"}
+              {currentDrop.stock_count === 0 ? "Sold Out" : "Grab It"}
             </button>
           </div>
-        )}
+
+          {dropProducts.length > 1 ? (
+            <div
+              className="mt-3 flex justify-center gap-2"
+              role="tablist"
+              aria-label="Browse drop products"
+            >
+              {dropProducts.map((p, i) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={i === activeIdx}
+                  aria-label={`Show ${p.title}`}
+                  onClick={() => setActiveIdx(i)}
+                  className={cn(
+                    "h-1.5 rounded-full transition-all duration-300",
+                    i === activeIdx
+                      ? "w-6 bg-brand-primary"
+                      : "w-1.5 bg-muted-foreground/35 hover:bg-muted-foreground/55"
+                  )}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -1107,8 +1193,7 @@ export function PerksShop() {
 
   const { user, profile, publicProducts, isLoadingPublic, refetchPrivate } =
     useAppDataContext();
-  const userTier = profile?.tier ?? "guest";
-  const nextTierXp = getNextTierXp(userTier);
+  const userTier = resolveTierKey(profile?.tier ?? "guest");
   const [stripeEnabled, setStripeEnabled] = useState(false);
   const checkoutToastHandled = useRef(false);
 
@@ -1259,20 +1344,11 @@ export function PerksShop() {
           </span>
           <TierBadge tier={userTier} size="sm" />
         </div>
-        <div className="mb-2 h-2 w-full overflow-hidden rounded-full bg-border dark:bg-white/10">
-          <div
-            className="h-full rounded-full bg-brand-primary transition-all"
-            style={{
-              width: `${Math.min(100, ((profile?.xp ?? 0) / Math.max(1, nextTierXp)) * 100)}%`,
-            }}
-          />
-        </div>
-        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-          <span>{profile?.xp ?? 0} XP</span>
-          <span>
-            {nextTierXp} XP to {TIER_CONFIG[userTier].label}
-          </span>
-        </div>
+        <TierXpProgress
+          xp={profile?.xp ?? 0}
+          tier={userTier}
+          variant="shop"
+        />
       </div>
 
       <DropZoneBanner

@@ -39,6 +39,7 @@ export function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
                 <button
                   type="button"
                   role="tab"
+                  data-onboarding-nav={tab.id}
                   aria-selected={isActive}
                   aria-current={isActive ? "page" : undefined}
                   onClick={() => onTabChange(tab.id)}

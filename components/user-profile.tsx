@@ -28,7 +28,7 @@ export type ProfileDrawerKey =
   | "referrals"
   | "settings";
 
-import { getTierLabel, type Profile } from "@/lib/types";
+import { resolveTierKey, type Profile } from "@/lib/types";
 import { schoolToConfig } from "@/lib/constants/schools";
 import { isDefaultAppTheme } from "@/lib/schools";
 import { useAppDataContext } from "@/lib/context/app-data-context";
@@ -67,6 +67,8 @@ const MENU_SECTIONS: { title: string; items: MenuRow[] }[] = [
 ];
 
 import { LazyLoginPrompt } from "@/components/auth/lazy-login-prompt";
+import { TierXpProgress } from "@/components/tier-xp-progress";
+import { TierBadge } from "@/components/tier-badge";
 
 export function UserProfile({ user, profile: contextProfile, isLoadingProfile, onOpenDrawer }: UserProfileProps) {
   const supabase = createClient();
@@ -113,8 +115,12 @@ export function UserProfile({ user, profile: contextProfile, isLoadingProfile, o
               </div>
             )}
           </div>
-          <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded-full border-2 border-border bg-card px-3 py-0.5 text-[10px] font-semibold tracking-tight text-foreground shadow-sm dark:border-white/20 dark:bg-[#1A1A1A] dark:text-white">
-            {getTierLabel(dbProfile?.tier)}
+          <div className="absolute -bottom-1 left-1/2 z-10 -translate-x-1/2">
+            <TierBadge
+              tier={resolveTierKey(dbProfile?.tier ?? "guest")}
+              size="sm"
+              className="shadow-md"
+            />
           </div>
         </div>
         <h1 className="text-fluid-xl font-bold tracking-tight text-foreground dark:text-white">
@@ -145,6 +151,16 @@ export function UserProfile({ user, profile: contextProfile, isLoadingProfile, o
           </div>
         )}
       </div>
+
+      {dbProfile && (
+        <div className="mb-6 w-full rounded-2xl border-2 border-border bg-muted/40 p-4 shadow-sm dark:border-white/10 dark:bg-white/5">
+          <TierXpProgress
+            xp={dbProfile.xp ?? 0}
+            tier={resolveTierKey(dbProfile.tier)}
+            variant="profile"
+          />
+        </div>
+      )}
 
       {/* Balance cards — open wallet drawer (same as My Wallet below) */}
       <div className="mb-8 grid grid-cols-2 gap-3">

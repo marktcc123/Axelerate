@@ -49,6 +49,8 @@ export interface Product {
   drop_time: string | null;
   category?: string | null;
   is_drop?: boolean;
+  /** Supabase: show in Perks Shop Friday Night Drop banner (carousel); countdown uses this row's drop_time */
+  show_in_friday_night_drop?: boolean;
   min_tier_required: UserTier;
   max_per_user: number | null;
   /** 关键功能点 (Bullet Points) */
@@ -183,6 +185,15 @@ export interface ShippingAddressJson {
   zip_code: string;
 }
 
+/**
+ * 游戏化快照：与 `profiles.xp` / `profiles.tier` 一致（Supabase Auth 的 `User` 不含这两项，请用 Profile）。
+ */
+export interface UserGameStats {
+  xp: number;
+  /** 与 DB `user_tier` 枚举一致的 key */
+  tier: UserTier;
+}
+
 export interface Profile {
   id: string;
   full_name: string | null;
@@ -198,6 +209,8 @@ export interface Profile {
   xp: number;
   tier: UserTier;
   referral_code: string | null;
+  /** Set once: referrer profile id after redeeming a friend’s code (signup bonus). */
+  referred_by?: string | null;
   is_w9_verified?: boolean;
   /** Storage 路径，如 `{userId}/w9.pdf` */
   w9_document_path?: string | null;
@@ -209,6 +222,12 @@ export interface Profile {
   interests?: string[] | null;
   resume_url?: string | null;
   portfolio_url?: string | null;
+  /** verification: phone_verified */
+  phone?: string | null;
+  /** verification: followed_brands (comma-separated list) */
+  followed_brands_list?: string | null;
+  /** verification: answered_questions */
+  interview_answers?: string | null;
   /** 收货地址 JSON */
   shipping_address?: ShippingAddressJson | Record<string, unknown> | null;
   created_at?: string;
@@ -309,32 +328,72 @@ export const TIER_ORDER: UserTier[] = [
   "partner",
 ];
 
+/** 高奢俱乐部风展示：DB key 不变，仅 label / 视觉焕新 */
 export const TIER_CONFIG: Record<
   UserTier,
-  { label: string; minXp: number; color: string }
+  {
+    label: string;
+    minXp: number;
+    /** 兼容旧组件（渐变等非 Tailwind 场景） */
+    color: string;
+    /** Neo-brutalism 勋章：粗边框 + 高对比填充 */
+    badgeClass: string;
+  }
 > = {
-  guest: { label: "Guest", minXp: 0, color: "hsl(0 0% 60%)" },
-  student: { label: "Scout", minXp: 0, color: "hsl(330 81% 60%)" },
-  staff: { label: "Staff", minXp: 200, color: "hsl(270 70% 60%)" },
-  city_manager: {
-    label: "City Manager",
-    minXp: 2000,
-    color: "hsl(0 0% 96%)",
+  guest: {
+    label: "Guest",
+    minXp: 0,
+    color: "hsl(240 4% 46%)",
+    badgeClass:
+      "bg-zinc-500 text-white border-black shadow-[3px_3px_0_0_rgba(0,0,0,1)] dark:border-white dark:shadow-[3px_3px_0_0_rgba(255,255,255,1)]",
   },
-  partner: { label: "Partner", minXp: 500, color: "hsl(270 91% 65%)" },
+  student: {
+    label: "Insider",
+    minXp: 0,
+    color: "hsl(270 91% 65%)",
+    badgeClass:
+      "bg-brand-primary text-primary-foreground border-black shadow-[3px_3px_0_0_rgba(0,0,0,1)] dark:border-white dark:shadow-[3px_3px_0_0_rgba(255,255,255,1)]",
+  },
+  staff: {
+    label: "Elite",
+    minXp: 1000,
+    color: "hsl(152 69% 56%)",
+    badgeClass:
+      "bg-emerald-400 text-black border-black shadow-[3px_3px_0_0_rgba(0,0,0,1)] dark:border-white dark:shadow-[3px_3px_0_0_rgba(255,255,255,1)]",
+  },
+  city_manager: {
+    label: "The Plug",
+    minXp: 5000,
+    color: "hsl(48 96% 53%)",
+    badgeClass:
+      "bg-yellow-400 text-black border-black shadow-[3px_3px_0_0_rgba(0,0,0,1)] dark:border-white dark:shadow-[3px_3px_0_0_rgba(255,255,255,1)]",
+  },
+  partner: {
+    label: "Syndicate",
+    minXp: 99999,
+    color: "hsl(0 84% 60%)",
+    badgeClass:
+      "bg-red-500 text-white border-black shadow-[3px_3px_0_0_rgba(0,0,0,1)] dark:border-white dark:shadow-[3px_3px_0_0_rgba(255,255,255,1)]",
+  },
 };
 
 /** 显示名到 UserTier 的映射（兼容 DB 返回的 Member/Elite 等） */
 const TIER_LABEL_TO_KEY: Record<string, UserTier> = {
   Member: "student",
   member: "student",
+  Insider: "student",
+  insider: "student",
   Elite: "staff",
   elite: "staff",
   "City Manager": "city_manager",
   "city manager": "city_manager",
+  "The Plug": "city_manager",
+  "the plug": "city_manager",
   city_manager: "city_manager",
   Partner: "partner",
   partner: "partner",
+  Syndicate: "partner",
+  syndicate: "partner",
   Guest: "guest",
   guest: "guest",
   Scout: "student",
@@ -345,15 +404,20 @@ const TIER_LABEL_TO_KEY: Record<string, UserTier> = {
 
 /** 扩展显示标签（Member, Elite, City Manager, Partner） */
 const TIER_DISPLAY_LABELS: Record<string, string> = {
-  Member: "Member",
-  member: "Member",
+  Member: "Insider",
+  member: "Insider",
+  Insider: "Insider",
+  insider: "Insider",
   Elite: "Elite",
   elite: "Elite",
-  "City Manager": "City Manager",
-  "city manager": "City Manager",
-  city_manager: "City Manager",
-  Partner: "Partner",
-  partner: "Partner",
+  "City Manager": "The Plug",
+  "city manager": "The Plug",
+  "The Plug": "The Plug",
+  city_manager: "The Plug",
+  Partner: "Syndicate",
+  partner: "Syndicate",
+  Syndicate: "Syndicate",
+  syndicate: "Syndicate",
 };
 
 /** 将 DB 返回的 tier 字符串解析为 UserTier */
@@ -387,11 +451,16 @@ export const EVENT_TIER_WEIGHTS: Record<string, number> = {
   partner: 4,
   Member: 1,
   member: 1,
+  Insider: 1,
+  insider: 1,
   Elite: 2,
   elite: 2,
   "City Manager": 3,
   "city manager": 3,
+  "The Plug": 3,
   Partner: 4,
+  Syndicate: 4,
+  syndicate: 4,
 };
 
 export function canAccessEvent(userTier: UserTier, eventMinTier: string | UserTier | undefined): boolean {
@@ -402,9 +471,15 @@ export function canAccessEvent(userTier: UserTier, eventMinTier: string | UserTi
   return userWeight >= requiredWeight;
 }
 
-/** 获取下一级所需 XP */
+/**
+ * 下一档 XP 门槛（跳过与当前 minXp 相同的相邻档，避免 Guest→Insider 同为 0）。
+ */
 export function getNextTierXp(tier: UserTier): number {
   const idx = TIER_ORDER.indexOf(tier);
-  if (idx >= TIER_ORDER.length - 1) return TIER_CONFIG[tier].minXp + 500;
-  return TIER_CONFIG[TIER_ORDER[idx + 1]].minXp;
+  const currentMin = TIER_CONFIG[tier].minXp;
+  for (let i = idx + 1; i < TIER_ORDER.length; i++) {
+    const nextMin = TIER_CONFIG[TIER_ORDER[i]].minXp;
+    if (nextMin > currentMin) return nextMin;
+  }
+  return TIER_CONFIG[tier].minXp + 500;
 }

@@ -3,6 +3,7 @@
 import { createContext, useContext, useState } from "react";
 import { useAppData } from "@/lib/hooks/useAppData";
 import type { UseAppDataReturn } from "@/lib/hooks/useAppData";
+import { TierUpgradeCelebration } from "@/components/tier-upgrade-celebration";
 
 export type AppDataContextValue = UseAppDataReturn & {
   previewAppTheme: string | null;
@@ -17,6 +18,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   return (
     <AppDataContext.Provider value={{ ...data, previewAppTheme, setPreviewAppTheme }}>
       {children}
+      <TierUpgradeCelebration />
     </AppDataContext.Provider>
   );
 }

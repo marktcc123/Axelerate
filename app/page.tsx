@@ -25,7 +25,9 @@ import { AdminChallengeModal } from "@/components/drawers/admin-challenge-modal"
 import { SettingsDrawer } from "@/components/drawers/settings-drawer";
 import { AdminReview } from "@/components/admin-review";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
+import { SmartOnboarding } from "@/components/smart-onboarding";
 import type { Gig, UserGig } from "@/lib/types";
+import type { FeedNotificationNavAction } from "@/lib/feed-notifications";
 
 export default function Page() {
   const searchParams = useSearchParams();
@@ -90,6 +92,32 @@ export default function Page() {
     });
   }, []);
 
+  const handleFeedNotificationNavigate = useCallback(
+    (action: FeedNotificationNavAction) => {
+      setSelectedGig(null);
+      if (action.kind === "drawer") {
+        setActiveTab("profile");
+        setProfileDrawer(action.key);
+        return;
+      }
+      if (action.kind === "tab") {
+        setProfileDrawer(null);
+        setActiveTab(action.tab);
+        return;
+      }
+      setProfileDrawer(null);
+      setActiveTab("feed");
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          document
+            .getElementById(action.id)
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 120);
+      });
+    },
+    [],
+  );
+
   const showMainApp = !!user || skippedOnboarding;
 
   if (!showMainApp) {
@@ -106,7 +134,11 @@ export default function Page() {
   ) : selectedGig ? (
     <GigDetail gig={selectedGig} onBack={handleBack} />
   ) : activeTab === "feed" ? (
-    <HomeFeed onSelectGig={handleSelectGig} />
+    <HomeFeed
+      onSelectGig={handleSelectGig}
+      onRequestLogin={() => setActiveTab("profile")}
+      onNotificationNavigate={handleFeedNotificationNavigate}
+    />
   ) : activeTab === "gigs" ? (
     <MyGigs
       onSelectGig={handleSelectGig}
@@ -205,6 +237,10 @@ export default function Page() {
         <BottomNav activeTab={activeTab} onTabChange={handleTabChange} />
       )}
 
+      {!isAdminUnlocked && (
+        <SmartOnboarding suppressWhen={!!selectedGig} />
+      )}
+
       <AdminChallengeModal
         open={adminChallengeOpen}
         onClose={() => setAdminChallengeOpen(false)}
@@ -222,7 +258,7 @@ export default function Page() {
         }}
       >
         <DrawerContent className="max-h-[95vh] border-t-2 border-border bg-card text-card-foreground [&>div:first-child]:bg-muted dark:border-white/10 dark:bg-zinc-950 dark:[&>div:first-child]:bg-white/20">
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3 dark:border-white/10">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-4 dark:border-white/10">
             <DrawerTitle className="min-w-0 truncate text-sm font-semibold tracking-tight text-foreground">
               {drawerTitle}
             </DrawerTitle>
@@ -230,7 +266,7 @@ export default function Page() {
               <X className="h-4 w-4" />
             </DrawerClose>
           </div>
-          <div className="min-w-0 px-4 pb-8">
+          <div className="min-w-0 px-4 pb-8 pt-5">
             {renderDrawerContent()}
           </div>
         </DrawerContent>

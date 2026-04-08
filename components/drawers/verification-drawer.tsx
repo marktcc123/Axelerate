@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { ChevronRight, CheckCircle2, Sparkles, ChevronDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { useAppDataContext } from "@/lib/context/app-data-context";
 import {
   DEFAULT_VERIFICATION_STEPS,
@@ -42,7 +43,11 @@ export function VerificationDrawer() {
     try {
       const result = await syncVerificationStep(user.id, stepKey, payload);
       if (result.success) {
-        toast.success("Saved!");
+        toast.success(
+          result.tierUpgraded
+            ? "All steps complete — you're now Insider (student tier)!"
+            : "Saved!",
+        );
         await refetchPrivate?.();
         setExpandedStep(null);
       } else {
@@ -59,6 +64,7 @@ export function VerificationDrawer() {
     <StepFormContent
       stepKey={stepKey}
       profile={profile}
+      user={user}
       onSave={handleSave}
       savingStep={savingStep}
     />
@@ -189,8 +195,11 @@ export function VerificationDrawer() {
         <div className="rounded-2xl border border-brand-primary/30 bg-brand-primary/10 p-5 text-center">
           <CheckCircle2 className="mx-auto mb-2 h-12 w-12 text-brand-primary" />
           <p className="text-xl font-black text-foreground">All verified!</p>
-          <p className="text-xs text-muted-foreground">
-            You rank higher in gig applications
+          <p className="mt-1 text-sm font-semibold text-brand-primary">
+            Guest → Insider unlocked when every step is saved.
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            You rank higher when applying to gigs.
           </p>
         </div>
       )}
@@ -206,11 +215,13 @@ const BASE_BTN =
 function StepFormContent({
   stepKey,
   profile,
+  user,
   onSave,
   savingStep,
 }: {
   stepKey: keyof VerificationSteps;
   profile: Profile | null;
+  user: SupabaseUser;
   onSave: (k: keyof VerificationSteps, p: Record<string, unknown>) => void;
   savingStep: keyof VerificationSteps | null;
 }) {
@@ -227,27 +238,23 @@ function StepFormContent({
       );
     case "has_avatar":
       return (
-        <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">
-            Upload a profile picture. (Storage integration placeholder)
-          </p>
-          <input type="file" accept="image/*" className={BASE_INPUT} disabled />
-          <button
-            onClick={() => onSave("has_avatar", { avatar_url: profile?.avatar_url ?? "" })}
-            disabled={saving || !profile?.avatar_url}
-            className={BASE_BTN}
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Save
-          </button>
-        </div>
+        <UrlInputForm
+          label="Paste a public image URL for your avatar (https://…). You can use a photo host or a direct link."
+          placeholder="https://example.com/my-photo.jpg"
+          defaultValue={profile?.avatar_url ?? ""}
+          onSave={(url) => onSave("has_avatar", { avatar_url: url })}
+          saving={saving}
+          submitLabel="Save & complete step"
+        />
       );
     case "added_skills":
       return (
         <TagInputForm
           profile={profile}
           fieldKey="skills"
-          label="Skills (comma-separated, e.g. Design, React, Marketing)"
+          minTags={3}
+          label="At least 3 skills, comma-separated"
+          placeholder="e.g. Design, React, Marketing"
           onSave={(p) => onSave("added_skills", p)}
           saving={saving}
         />
@@ -257,7 +264,9 @@ function StepFormContent({
         <TagInputForm
           profile={profile}
           fieldKey="interests"
-          label="Interests (comma-separated)"
+          minTags={3}
+          label="At least 3 interests, comma-separated"
+          placeholder="e.g. Music, Startups, Fitness"
           onSave={(p) => onSave("added_interests", p)}
           saving={saving}
         />
@@ -265,41 +274,59 @@ function StepFormContent({
     case "has_resume":
       return (
         <UrlInputForm
-          placeholder="Resume URL (e.g. Google Drive link)"
+          label="Link to your resume (Google Drive, Dropbox, or personal site)."
+          placeholder="https://…"
           defaultValue={profile?.resume_url ?? ""}
           onSave={(url) => onSave("has_resume", { resume_url: url })}
           saving={saving}
+          submitLabel="Save & complete step"
         />
       );
     case "added_portfolio":
       return (
         <UrlInputForm
-          placeholder="Portfolio URL (e.g. Behance, personal site)"
+          label="Portfolio or project page."
+          placeholder="https://behance.net/… or your site"
           defaultValue={profile?.portfolio_url ?? ""}
           onSave={(url) => onSave("added_portfolio", { portfolio_url: url })}
           saving={saving}
+          submitLabel="Save & complete step"
         />
       );
     case "phone_verified":
-    case "email_verified":
-    case "followed_brands":
-    case "answered_questions":
-    default:
       return (
-        <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">
-            This step requires external verification. (Placeholder)
-          </p>
-          <button
-            onClick={() => onSave(stepKey, {})}
-            disabled={saving}
-            className={BASE_BTN}
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Mark as done
-          </button>
-        </div>
+        <PhoneVerificationForm
+          defaultPhone={profile?.phone ?? ""}
+          onSave={(phone) => onSave("phone_verified", { phone })}
+          saving={saving}
+        />
       );
+    case "email_verified":
+      return (
+        <EmailVerificationForm
+          user={user}
+          onSave={() => onSave("email_verified", {})}
+          saving={saving}
+        />
+      );
+    case "followed_brands":
+      return (
+        <FollowedBrandsForm
+          defaultValue={profile?.followed_brands_list ?? ""}
+          onSave={(text) => onSave("followed_brands", { followed_brands_list: text })}
+          saving={saving}
+        />
+      );
+    case "answered_questions":
+      return (
+        <InterviewAnswersForm
+          defaultValue={profile?.interview_answers ?? ""}
+          onSave={(text) => onSave("answered_questions", { interview_answers: text })}
+          saving={saving}
+        />
+      );
+    default:
+      return null;
   }
 }
 
@@ -340,12 +367,182 @@ function AddedSchoolForm({
         className={BASE_INPUT}
       />
       <button
+        type="button"
         onClick={() => onSave({ campus: school, graduation_year: gradYear })}
-        disabled={saving}
+        disabled={saving || !school.trim() || !gradYear.trim()}
         className={BASE_BTN}
       >
         {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-        Save
+        Save & complete step
+      </button>
+    </div>
+  );
+}
+
+function PhoneVerificationForm({
+  defaultPhone,
+  onSave,
+  saving,
+}: {
+  defaultPhone: string;
+  onSave: (phone: string) => void;
+  saving: boolean;
+}) {
+  const [phone, setPhone] = useState(defaultPhone);
+  useEffect(() => {
+    setPhone(defaultPhone);
+  }, [defaultPhone]);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        We store your number on your profile. SMS verification can be added later — for now,
+        enter the number you use for campus programs.
+      </p>
+      <input
+        type="tel"
+        inputMode="tel"
+        autoComplete="tel"
+        placeholder="(555) 123-4567"
+        value={phone}
+        onChange={(e) => setPhone(e.target.value)}
+        className={BASE_INPUT}
+      />
+      <button
+        type="button"
+        onClick={() => onSave(phone)}
+        disabled={saving || phone.replace(/\D/g, "").length < 10}
+        className={BASE_BTN}
+      >
+        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+        Save & complete step
+      </button>
+    </div>
+  );
+}
+
+function EmailVerificationForm({
+  user,
+  onSave,
+  saving,
+}: {
+  user: SupabaseUser;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  const confirmed = Boolean(user.email_confirmed_at);
+  const email = user.email ?? "—";
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">We use your sign-in email:</p>
+      <p className="break-all rounded-xl border border-border bg-muted/30 px-3 py-2 font-mono text-sm text-foreground dark:border-white/10 dark:bg-black/30">
+        {email}
+      </p>
+      {confirmed ? (
+        <button type="button" onClick={onSave} disabled={saving} className={BASE_BTN}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Confirm & complete step
+        </button>
+      ) : (
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-200">
+          Open the confirmation link in the email we sent when you signed up. After your email
+          shows as confirmed in Supabase Auth, return here and tap the button above (it will
+          appear once confirmed).
+        </p>
+      )}
+    </div>
+  );
+}
+
+function FollowedBrandsForm({
+  defaultValue,
+  onSave,
+  saving,
+}: {
+  defaultValue: string;
+  onSave: (text: string) => void;
+  saving: boolean;
+}) {
+  const [text, setText] = useState(defaultValue);
+  useEffect(() => {
+    setText(defaultValue);
+  }, [defaultValue]);
+
+  const count = text
+    .split(/[,，\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        List at least <span className="font-semibold text-foreground">5 brands</span> you follow
+        on social or shop from (comma or new line separated). This syncs to your profile.
+      </p>
+      <textarea
+        rows={4}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Rare Beauty, Glossier, Nike, Apple, Starbucks"
+        className={cn(BASE_INPUT, "min-h-[100px] resize-y")}
+      />
+      <p className="text-[11px] text-muted-foreground">{count} brand(s) detected — need 5+</p>
+      <button
+        type="button"
+        onClick={() => onSave(text)}
+        disabled={saving || count < 5}
+        className={BASE_BTN}
+      >
+        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+        Save & complete step
+      </button>
+    </div>
+  );
+}
+
+function InterviewAnswersForm({
+  defaultValue,
+  onSave,
+  saving,
+}: {
+  defaultValue: string;
+  onSave: (text: string) => void;
+  saving: boolean;
+}) {
+  const [text, setText] = useState(defaultValue);
+  useEffect(() => {
+    setText(defaultValue);
+  }, [defaultValue]);
+
+  const len = text.trim().length;
+  const min = 60;
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Answer three short prompts in one box (e.g. Why Axelerate? Favorite campaign you’ve
+        seen? How do you create content?). Minimum {min} characters — saved to your profile.
+      </p>
+      <textarea
+        rows={6}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="1) … 2) … 3) …"
+        className={cn(BASE_INPUT, "min-h-[140px] resize-y")}
+      />
+      <p className="text-[11px] text-muted-foreground">
+        {len}/{min} characters
+        {len < min ? " — keep typing" : " — ready"}
+      </p>
+      <button
+        type="button"
+        onClick={() => onSave(text)}
+        disabled={saving || len < min}
+        className={BASE_BTN}
+      >
+        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+        Save & complete step
       </button>
     </div>
   );
@@ -355,12 +552,16 @@ function TagInputForm({
   profile,
   fieldKey,
   label,
+  placeholder,
+  minTags,
   onSave,
   saving,
 }: {
   profile: Profile | null;
   fieldKey: string;
   label: string;
+  placeholder?: string;
+  minTags: number;
   onSave: (p: Record<string, unknown>) => void;
   saving: boolean;
 }) {
@@ -384,41 +585,69 @@ function TagInputForm({
     onSave({ [fieldKey]: list });
   };
 
+  const count = value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+
   return (
     <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
       <input
         type="text"
-        placeholder={label}
+        placeholder={placeholder ?? label}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         className={BASE_INPUT}
       />
-      <button onClick={handleSave} disabled={saving} className={BASE_BTN}>
+      <p className="text-[11px] text-muted-foreground">
+        {count} tag(s) — need at least {minTags}
+      </p>
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={saving || count < minTags}
+        className={BASE_BTN}
+      >
         {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-        Save
+        Save & complete step
       </button>
     </div>
   );
 }
 
 function UrlInputForm({
+  label,
   placeholder,
   defaultValue,
   onSave,
   saving,
+  submitLabel = "Save & complete step",
 }: {
+  label?: string;
   placeholder: string;
   defaultValue: string;
   onSave: (url: string) => void;
   saving: boolean;
+  submitLabel?: string;
 }) {
   const [url, setUrl] = useState(defaultValue);
   useEffect(() => {
     setUrl(defaultValue);
   }, [defaultValue]);
 
+  const trimmed = url.trim();
+  let looksOk = trimmed.length > 0;
+  try {
+    const u = new URL(trimmed);
+    looksOk = u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    looksOk = false;
+  }
+
   return (
     <div className="space-y-3">
+      {label ? <p className="text-xs leading-relaxed text-muted-foreground">{label}</p> : null}
       <input
         type="url"
         placeholder={placeholder}
@@ -426,9 +655,14 @@ function UrlInputForm({
         onChange={(e) => setUrl(e.target.value)}
         className={BASE_INPUT}
       />
-      <button onClick={() => onSave(url)} disabled={saving} className={BASE_BTN}>
+      <button
+        type="button"
+        onClick={() => onSave(trimmed)}
+        disabled={saving || !looksOk}
+        className={BASE_BTN}
+      >
         {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-        Save
+        {submitLabel}
       </button>
     </div>
   );

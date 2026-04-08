@@ -1,16 +1,12 @@
-import React from "react"
+import React from "react";
 import { cn } from "@/lib/utils";
 import type { UserTier } from "@/lib/types";
 import { TIER_CONFIG } from "@/lib/types";
-import { Shield, Star, Crown, User, Briefcase } from "lucide-react";
-
-const tierIcons: Record<UserTier, React.ElementType> = {
-  guest: User,
-  student: Shield,
-  staff: Briefcase,
-  city_manager: Crown,
-  partner: Star,
-};
+import {
+  TierGlyph,
+  tierBadgeShellClass,
+  tierBadgeLabelClass,
+} from "@/components/tier-identity";
 
 interface TierBadgeProps {
   tier: UserTier;
@@ -20,7 +16,6 @@ interface TierBadgeProps {
 
 export function TierBadge({ tier, size = "md", className }: TierBadgeProps) {
   const config = TIER_CONFIG[tier];
-  const Icon = tierIcons[tier];
 
   const sizeClasses = {
     sm: "px-2 py-0.5 text-[10px] gap-1",
@@ -28,27 +23,27 @@ export function TierBadge({ tier, size = "md", className }: TierBadgeProps) {
     lg: "px-4 py-1.5 text-sm gap-2",
   };
 
-  const iconSizes = {
-    sm: "h-3 w-3",
-    md: "h-3.5 w-3.5",
-    lg: "h-4 w-4",
+  const glyphSizes = {
+    sm: "sm" as const,
+    md: "md" as const,
+    lg: "lg" as const,
   };
 
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border font-mono font-bold uppercase tracking-wider",
+        "inline-flex items-center rounded-full font-mono uppercase tracking-wider",
         sizeClasses[size],
-        (tier === "guest" || tier === "student") && "border-brand-primary/30 bg-brand-primary/10 text-brand-primary",
+        tierBadgeShellClass(tier),
         tier === "partner" &&
-          "border-white/20 bg-white/10 text-foreground backdrop-blur-md",
-        (tier === "city_manager" || tier === "staff") &&
-          "border-foreground/30 bg-foreground/10 text-foreground",
-        className
+          "motion-safe:animate-[tier-badge-syndicate-glow_3.5s_ease-in-out_infinite]",
+        className,
       )}
     >
-      <Icon className={iconSizes[size]} />
-      {config.label}
+      <TierGlyph tier={tier} size={glyphSizes[size]} className="shrink-0" />
+      <span className={cn("min-w-0 truncate", tierBadgeLabelClass(tier))}>
+        {config.label}
+      </span>
     </span>
   );
 }

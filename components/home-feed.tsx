@@ -12,7 +12,6 @@ import {
   CalendarDays,
   Lock,
   TrendingUp,
-  Bell,
   Search,
   Flame,
   Sparkles,
@@ -38,14 +37,13 @@ import {
   getTierLabel,
   resolveTierKey,
   TIER_CONFIG,
-  TIER_ORDER,
-  getNextTierXp,
 } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import Confetti from "react-confetti";
 import { toast } from "sonner";
 import type { Gig, UserTier, Event, Brand, Product } from "@/lib/types";
 import { TierBadge } from "./tier-badge";
+import { TierXpProgress } from "./tier-xp-progress";
 import { Skeleton } from "./ui/skeleton";
 import { schoolToConfig } from "@/lib/constants/schools";
 import { DEFAULT_SCHOOL_NAME, isDefaultAppTheme } from "@/lib/schools";
@@ -57,6 +55,8 @@ import {
   DrawerClose,
 } from "@/components/ui/drawer";
 import { BrandsDrawer } from "./drawers/brands-drawer";
+import { FeedNotificationsBell } from "./feed-notifications-bell";
+import type { FeedNotificationNavAction } from "@/lib/feed-notifications";
 
 type Filter = "all" | "digital" | "physical";
 
@@ -774,9 +774,14 @@ function FeedThemeToggle() {
 interface HomeFeedProps {
   onSelectGig: (gig: Gig) => void;
   onRequestLogin?: () => void;
+  onNotificationNavigate?: (action: FeedNotificationNavAction) => void;
 }
 
-export function HomeFeed({ onSelectGig, onRequestLogin }: HomeFeedProps) {
+export function HomeFeed({
+  onSelectGig,
+  onRequestLogin,
+  onNotificationNavigate,
+}: HomeFeedProps) {
   const [filter, setFilter] = useState<Filter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
@@ -803,7 +808,7 @@ export function HomeFeed({ onSelectGig, onRequestLogin }: HomeFeedProps) {
     refetchPrivate,
   } = useAppDataContext();
 
-  const userTier = profile?.tier ?? "guest";
+  const userTier = resolveTierKey(profile?.tier ?? "guest");
   const displayName =
     profile?.full_name?.split(" ")[0] ??
     user?.user_metadata?.name?.split(" ")[0] ??
@@ -879,11 +884,6 @@ export function HomeFeed({ onSelectGig, onRequestLogin }: HomeFeedProps) {
     setEventDrawerOpen(true);
   }, []);
 
-  const nextTierXp = getNextTierXp(userTier);
-  const xpProgress = Math.round((profile?.xp ?? 0) / Math.max(1, nextTierXp) * 100);
-  const nextTierLabel =
-    TIER_ORDER[Math.min(TIER_ORDER.indexOf(userTier) + 1, TIER_ORDER.length - 1)];
-  const nextTierConfig = TIER_CONFIG[nextTierLabel as UserTier];
   const effectiveAppTheme = previewAppTheme ?? profile?.app_theme ?? null;
   const isDefaultTheme = isDefaultAppTheme(effectiveAppTheme);
   const hasRealCampus =
@@ -966,14 +966,10 @@ export function HomeFeed({ onSelectGig, onRequestLogin }: HomeFeedProps) {
                 Guest
               </span>
             )}
-            <button
-              type="button"
-              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-border bg-muted/50 backdrop-blur-sm transition-colors hover:bg-muted"
-              aria-label="Notifications"
-            >
-              <Bell className="h-4.5 w-4.5 text-foreground" />
-              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-brand-primary" />
-            </button>
+            <FeedNotificationsBell
+              onNavigate={onNotificationNavigate}
+              onRequestLogin={onRequestLogin}
+            />
             <FeedThemeToggle />
           </div>
         </div>
@@ -987,29 +983,11 @@ export function HomeFeed({ onSelectGig, onRequestLogin }: HomeFeedProps) {
       ) : (
         <>
           <div className="mb-6 rounded-2xl border-2 border-border bg-muted/40 p-4 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-white/5 dark:shadow-none">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-brand-primary" />
-                <span className="font-mono text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                  Level Progress
-                </span>
-              </div>
-              <span className="font-mono text-xs text-muted-foreground">
-                {profile?.xp ?? 0} / {nextTierXp} XP
-              </span>
-            </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-border/40 dark:bg-white/10">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-brand-primary to-purple-500 transition-all duration-700"
-                style={{ width: `${Math.min(100, xpProgress)}%` }}
-              />
-            </div>
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              <span className="font-bold text-brand-primary">
-                {Math.max(0, nextTierXp - (profile?.xp ?? 0))} XP
-              </span>{" "}
-              to unlock {nextTierConfig.label}
-            </p>
+            <TierXpProgress
+              xp={profile?.xp ?? 0}
+              tier={userTier}
+              variant="feed"
+            />
           </div>
 
           <div className="mb-6 grid grid-cols-3 gap-2">

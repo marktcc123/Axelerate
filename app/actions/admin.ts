@@ -8,6 +8,8 @@ import type { School } from "@/lib/schools";
 import { DEFAULT_SCHOOL_NAME } from "@/lib/schools";
 import { ORDERS_COLUMNS_MIN, ORDERS_SELECT_WITH_PROFILE } from "@/lib/orders-select";
 import type { OrderItemRaw } from "@/lib/types";
+import { resolveTierKey } from "@/lib/types";
+import { promoteTierForXp } from "@/lib/tier-progress";
 
 /** 获取当前登录用户 ID（审批人） */
 async function getActorId(): Promise<string | null> {
@@ -1081,7 +1083,7 @@ export async function markGigAsPaid(
   // 2. 读取用户当前钱包余额
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("cash_balance, credit_balance, xp")
+    .select("cash_balance, credit_balance, xp, tier")
     .eq("id", userId)
     .single();
 
@@ -1094,13 +1096,19 @@ export async function markGigAsPaid(
   const cashAdd = Number(rewardCash) || 0;
   const creditsAdd = Number(rewardCredits) || 0;
   const xpAdd = Number(rewardXp) || 0;
+  const newXp = (Number(profile.xp) || 0) + xpAdd;
+  const prevTier = resolveTierKey(
+    profile.tier != null ? String(profile.tier) : "guest"
+  );
+  const nextTier = promoteTierForXp(prevTier, newXp);
 
   const { error: walletError } = await supabase
     .from("profiles")
     .update({
       cash_balance: (Number(profile.cash_balance) || 0) + cashAdd,
       credit_balance: (Number(profile.credit_balance) || 0) + creditsAdd,
-      xp: (Number(profile.xp) || 0) + xpAdd,
+      xp: newXp,
+      tier: nextTier,
       updated_at: now,
     })
     .eq("id", userId);

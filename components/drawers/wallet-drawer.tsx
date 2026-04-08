@@ -23,8 +23,9 @@ import {
 import { submitW9Document } from "@/app/actions/w9-upload";
 import { cn } from "@/lib/utils";
 import { useAppDataContext } from "@/lib/context/app-data-context";
-import { TIER_CONFIG, getNextTierXp } from "@/lib/types";
+import { resolveTierKey } from "@/lib/types";
 import { TierBadge } from "../tier-badge";
+import { TierXpProgress } from "../tier-xp-progress";
 import type { WalletActivityItem } from "@/app/actions/wallet-activity";
 import {
   Dialog,
@@ -125,8 +126,7 @@ export function WalletDrawer() {
   const clearedAmount = cleared.reduce((s, t) => s + Number(t.amount), 0);
   const cashBalance = Number(profile?.cash_balance ?? 0);
   const creditBalance = profile?.credit_balance ?? 0;
-  const userTier = profile?.tier ?? "guest";
-  const nextTierXp = getNextTierXp(userTier);
+  const userTier = resolveTierKey(profile?.tier ?? "guest");
 
   if (!profile && !isLoadingPrivate) {
     return (
@@ -165,25 +165,11 @@ export function WalletDrawer() {
 
       {/* XP Progress */}
       <div className="mb-6 rounded-2xl border border-border bg-card p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-medium tracking-tight text-muted-foreground">
-            Level progress
-          </span>
-          <span className="text-xs font-semibold tabular-nums text-brand-primary">
-            {profile?.xp ?? 0} / {nextTierXp} XP
-          </span>
-        </div>
-        <div className="mb-2 h-3 w-full overflow-hidden rounded-full bg-secondary">
-          <div
-            className="h-full rounded-full bg-brand-primary transition-all"
-            style={{
-              width: `${Math.min(100, ((profile?.xp ?? 0) / Math.max(1, nextTierXp)) * 100)}%`,
-            }}
-          />
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {Math.max(0, nextTierXp - (profile?.xp ?? 0))} XP until {TIER_CONFIG[userTier].label}
-        </p>
+        <TierXpProgress
+          xp={profile?.xp ?? 0}
+          tier={userTier}
+          variant="wallet"
+        />
       </div>
 
       {/* $500 Yellow Warning */}

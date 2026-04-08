@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, type FormEvent } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   Users,
@@ -14,6 +14,8 @@ import {
   TrendingUp,
   ShieldAlert,
   Clock,
+  Gift,
+  Ticket,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -21,6 +23,15 @@ import { createClient } from "@/lib/supabase/client";
 import { useAppDataContext } from "@/lib/context/app-data-context";
 import { generateReferralCode } from "@/lib/referral-code";
 import { DrawerScreenHeader } from "@/components/drawers/drawer-screen-header";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { redeemReferralSignupCode } from "@/app/actions/redeem-referral-code";
 
 const blockReasonLabels: Record<string, string> = {
   "address-match": "Shipping address matches ambassador",
@@ -33,14 +44,23 @@ function formatReferralPts(n: number): string {
   return `${v.toLocaleString()} pts`;
 }
 
+function referredDisplayName(ref: ReferralRow): string {
+  const raw = ref.referred_profile?.full_name?.trim();
+  if (raw) return raw;
+  const tail = ref.referred_id.replace(/-/g, "").slice(-6).toUpperCase();
+  return tail ? `Member · ${tail}` : "Member";
+}
+
 interface ReferralRow {
   id: string;
   referrer_id: string;
   referred_id: string;
   reward_amount: number;
+  reward_xp?: number | null;
   status: "pending" | "approved" | "blocked";
   blocked_reason: string | null;
   created_at: string;
+  referred_profile?: { full_name: string | null } | null;
 }
 
 export function ReferralsDrawer() {
@@ -54,6 +74,10 @@ export function ReferralsDrawer() {
   const [savingCode, setSavingCode] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [origin, setOrigin] = useState("");
+  const [redeemInput, setRedeemInput] = useState("");
+  const [redeemBusy, setRedeemBusy] = useState(false);
+  const [congratsOpen, setCongratsOpen] = useState(false);
+  const [congratsCredits, setCongratsCredits] = useState(2000);
 
   const supabase = createClient();
 
@@ -100,12 +124,24 @@ export function ReferralsDrawer() {
     if (!user?.id) return;
     const fetchRefs = async () => {
       setLoadingRefs(true);
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("referrals")
-        .select("*")
+        .select(
+          `
+          *,
+          referred_profile:profiles!referrals_referred_id_fkey (
+            full_name
+          )
+        `,
+        )
         .eq("referrer_id", user.id)
         .order("created_at", { ascending: false });
-      setReferrals((data as ReferralRow[]) ?? []);
+      if (error) {
+        console.warn("[ReferralsDrawer] fetch referrals", error);
+        setReferrals([]);
+      } else {
+        setReferrals((data as ReferralRow[]) ?? []);
+      }
       setLoadingRefs(false);
     };
     fetchRefs();
@@ -149,6 +185,24 @@ export function ReferralsDrawer() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleRedeemSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    const code = redeemInput.trim();
+    if (!code || redeemBusy) return;
+    setRedeemBusy(true);
+    const res = await redeemReferralSignupCode(code);
+    setRedeemBusy(false);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    setCongratsCredits(res.refereeCredits);
+    setRedeemInput("");
+    setCongratsOpen(true);
+    toast.success("Referral code applied");
+    await refetchPrivate({ silent: true });
+  };
+
   const handleShareLink = async () => {
     if (!referralUrl) {
       toast.error("Link not ready yet");
@@ -189,14 +243,97 @@ export function ReferralsDrawer() {
     );
   }
 
+  const hasRedeemed = Boolean(profile?.referred_by);
+
   return (
     <div className="min-w-0 pb-4">
       <DrawerScreenHeader
         kickerIcon={<Users className="h-4 w-4 shrink-0" aria-hidden />}
         kicker="Ambassador program"
         title="Referrals"
-        subtitle="Earn 1,000 credits and 100 XP for each successful referral (subject to program rules)."
       />
+
+      <div className="mb-6 rounded-2xl border border-border bg-card p-5 shadow-sm dark:border-white/10 dark:bg-zinc-950/80">
+        <div className="mb-2 flex items-center gap-2">
+          <Ticket className="h-4 w-4 shrink-0 text-brand-primary" aria-hidden />
+          <h3 className="text-sm font-semibold tracking-tight text-foreground">
+            Redeem a referral code
+          </h3>
+        </div>
+        <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+          New to Axelerate? Enter a friend&apos;s code{" "}
+          <span className="font-semibold text-foreground">once</span>. We verify it against
+          real accounts. You&apos;ll receive{" "}
+          <span className="font-semibold text-foreground">2,000 credits</span>; your friend
+          gets <span className="font-semibold text-foreground">1,000 credits</span> and{" "}
+          <span className="font-semibold text-foreground">100 XP</span>.
+        </p>
+        {hasRedeemed ? (
+          <div className="flex items-start gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2.5">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
+            <p className="text-xs font-medium leading-snug text-emerald-200/90">
+              You&apos;ve already redeemed a referral code. Thanks for joining through the
+              community.
+            </p>
+          </div>
+        ) : (
+          <form onSubmit={(e) => void handleRedeemSubmit(e)} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="min-w-0 flex-1">
+              <label htmlFor="referral-redeem-input" className="sr-only">
+                Referral code
+              </label>
+              <input
+                id="referral-redeem-input"
+                type="text"
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                placeholder="Enter code (e.g. AX123ABC)"
+                value={redeemInput}
+                onChange={(e) => setRedeemInput(e.target.value)}
+                disabled={redeemBusy}
+                className="w-full rounded-xl border-2 border-border bg-muted/30 px-3 py-2.5 font-mono text-sm text-foreground placeholder:text-muted-foreground focus:border-brand-primary/50 focus:outline-none disabled:opacity-60 dark:border-white/10 dark:bg-black/30"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={redeemBusy || !redeemInput.trim()}
+              className="shrink-0 rounded-xl bg-brand-primary px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-primary-foreground shadow-sm transition-opacity hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {redeemBusy ? "Checking…" : "Redeem"}
+            </button>
+          </form>
+        )}
+      </div>
+
+      <Dialog open={congratsOpen} onOpenChange={setCongratsOpen}>
+        <DialogContent className="z-[240] max-w-sm border-2 border-border bg-card dark:border-white/10 dark:bg-zinc-950">
+          <DialogHeader>
+            <div className="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full bg-brand-primary/15 ring-2 ring-brand-primary/30">
+              <Gift className="h-7 w-7 text-brand-primary" aria-hidden />
+            </div>
+            <DialogTitle className="text-center font-display text-xl font-black tracking-tight">
+              Welcome aboard
+            </DialogTitle>
+            <DialogDescription className="text-center text-sm leading-relaxed">
+              Your referral code was applied successfully.{" "}
+              <span className="font-semibold text-foreground">
+                {congratsCredits.toLocaleString()} credits
+              </span>{" "}
+              have been added to your account as a new-member reward.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="sm:justify-center">
+            <button
+              type="button"
+              onClick={() => setCongratsOpen(false)}
+              className="w-full rounded-xl bg-brand-primary py-3 text-sm font-bold uppercase tracking-wider text-primary-foreground transition-opacity hover:opacity-95 sm:w-auto sm:px-8"
+            >
+              Let&apos;s go
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="mb-6 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-5">
         <p className="mb-2 text-xs font-medium tracking-tight text-muted-foreground">
@@ -372,11 +509,17 @@ export function ReferralsDrawer() {
                      ref.status === "blocked" ? <XCircle className="h-4 w-4" /> :
                      <Clock className="h-4 w-4" />}
                   </div>
-                  <div>
-                    <p className="text-xs font-bold text-foreground">
-                      {ref.status === "blocked" ? "Blocked" : "Referral"}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-foreground">
+                      {referredDisplayName(ref)}
                     </p>
                     <p className="text-[10px] text-muted-foreground">
+                      {ref.status === "pending"
+                        ? "Pending review"
+                        : ref.status === "blocked"
+                          ? "Blocked referral"
+                          : "Used your code"}
+                      {" · "}
                       {new Date(ref.created_at).toLocaleDateString()}
                     </p>
                     {ref.status === "blocked" && ref.blocked_reason && (
@@ -386,7 +529,7 @@ export function ReferralsDrawer() {
                     )}
                   </div>
                 </div>
-                <div className="text-right">
+                <div className="shrink-0 text-right">
                   <p
                     className={cn(
                       "text-sm font-bold tabular-nums",
@@ -399,8 +542,15 @@ export function ReferralsDrawer() {
                   >
                     {ref.status === "blocked"
                       ? "0 pts"
-                      : `+${formatReferralPts(Number(ref.reward_amount))}`}
+                      : ref.status === "pending"
+                        ? "—"
+                        : `+${formatReferralPts(Number(ref.reward_amount))}`}
                   </p>
+                  {ref.status === "approved" && Math.round(Number(ref.reward_xp ?? 0)) > 0 ? (
+                    <p className="mt-0.5 text-xs font-bold tabular-nums text-violet-300">
+                      +{Math.round(Number(ref.reward_xp))} XP
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </div>
