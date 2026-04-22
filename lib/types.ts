@@ -30,6 +30,8 @@ export interface Brand {
   is_featured: boolean;
   description?: string | null;
   category?: string | null;
+  /** 与 Shopify Product.vendor 对齐，用于 Webhook 幂等匹配 */
+  shopify_vendor?: string | null;
   /** Admin: show brand internship proof card in Axelerate Career when user qualifies */
   career_internship_proof_enabled?: boolean;
   /** Admin: show brand referral lane in Axelerate Career when user qualifies */
