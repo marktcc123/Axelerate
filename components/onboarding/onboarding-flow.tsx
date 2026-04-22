@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { SplashScreen } from "./splash-screen";
 import { AuthWrapper } from "./auth-wrapper";
@@ -31,25 +31,31 @@ interface OnboardingFlowProps {
   onComplete: () => void;
 }
 
+const subscribeStorage = () => () => {};
+function readHasSeenIntroSnapshot(): boolean {
+  return getHasSeenIntro();
+}
+
 export function OnboardingFlow({ isLoggedIn, onComplete }: OnboardingFlowProps) {
   const [phase, setPhase] = useState<Phase>("splash");
-  const [hasSeenIntro, setHasSeenIntroState] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  /** Same-tab localStorage 写入不会触发 store 的 subscribe，用 revision 强刷一帧。 */
+  const [storageRev, setStorageRev] = useState(0);
+  const hasSeenIntro = useSyncExternalStore(
+    subscribeStorage,
+    () => {
+      void storageRev;
+      return readHasSeenIntroSnapshot();
+    },
+    () => false
+  );
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (!mounted) return;
-    const seen = getHasSeenIntro();
-    setHasSeenIntroState(seen);
-    if (seen && isLoggedIn) {
+    if (hasSeenIntro && isLoggedIn) {
       onComplete();
-    } else if (seen && !isLoggedIn) {
+    } else if (hasSeenIntro && !isLoggedIn) {
       setPhase("auth");
     }
-  }, [mounted, isLoggedIn, onComplete]);
+  }, [hasSeenIntro, isLoggedIn, onComplete]);
 
   const handleSplashComplete = useCallback(() => {
     setPhase("intro");
@@ -57,21 +63,13 @@ export function OnboardingFlow({ isLoggedIn, onComplete }: OnboardingFlowProps) 
 
   const handleGetStarted = useCallback(() => {
     setHasSeenIntro();
-    setHasSeenIntroState(true);
+    setStorageRev((n) => n + 1);
     setPhase("auth");
   }, []);
 
   const handleAuthSuccess = useCallback(() => {
     onComplete();
   }, [onComplete]);
-
-  if (!mounted) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="h-2 w-20 animate-pulse rounded-full bg-brand-primary/40" />
-      </div>
-    );
-  }
 
   if (hasSeenIntro && isLoggedIn) {
     return null;

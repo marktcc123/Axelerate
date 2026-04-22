@@ -41,6 +41,12 @@ export interface Brand {
 export interface Product {
   id: string;
   brand_id: string;
+  /** Shopify Admin 数字 ID，Webhook 同步时写入 */
+  shopify_product_id?: number | null;
+  /** in_app | dropshipping 等 */
+  fulfillment_type?: string | null;
+  /** 上架状态：active | draft 等 */
+  status?: string | null;
   /** Feed 首页 TRENDING：有任意 true 时仅展示精选；全 false 时按创建时间取前 12 */
   is_featured?: boolean;
   title: string;
@@ -270,6 +276,8 @@ export interface Transaction {
 export interface OrderItemRaw {
   id: string;
   quantity: number;
+  /** 例如 dropshipping 行：与 Shopify 变体 GID 对齐 */
+  orderType?: string;
 }
 
 export interface Order {
