@@ -428,7 +428,7 @@ async function handleDropshippingSession(
   const phone = namePhone.phone ?? shippingAddress?.phone ?? billingAddress?.phone;
 
   try {
-    await createPaidOrderInShopify({
+    const shopifyOrder = await createPaidOrderInShopify({
       stripeReference: {
         paymentIntentId,
         checkoutSessionId: sessionId,
@@ -465,6 +465,11 @@ async function handleDropshippingSession(
           : []),
       ],
       sendReceipt: false,
+    });
+    console.info("[stripe webhook] Shopify order created (dropship card)", {
+      sessionId,
+      shopifyOrderId: shopifyOrder.orderId,
+      shopifyOrderName: shopifyOrder.orderName,
     });
 
     if (creditsUsed > 0) {
@@ -554,6 +559,13 @@ export async function POST(request: Request) {
   const session = event.data.object as Stripe.Checkout.Session;
   const sessionId = session.id;
   const supabase = createAdminClient();
+
+  console.info("[stripe webhook] checkout.session.completed", {
+    sessionId,
+    purpose: session.metadata?.purpose ?? null,
+    orderType: session.metadata?.orderType ?? null,
+    hasDropshipLines: Boolean(session.metadata?.dropshipLines?.trim()),
+  });
 
   if (session.metadata?.purpose === "wallet_topup") {
     const r = await fulfillWalletTopUpFromSession(supabase, session);

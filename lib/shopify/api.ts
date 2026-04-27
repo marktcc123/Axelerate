@@ -6,7 +6,7 @@ import "server-only";
  * 环境变量（.env.local）：
  * - SHOPIFY_STORE_DOMAIN：如 `your-store.myshopify.com`（不含 https）
  * - SHOPIFY_STOREFRONT_ACCESS_TOKEN：Headless Storefront API 令牌
- * - SHOPIFY_ADMIN_ACCESS_TOKEN：需 `write_orders`、`read_products`、`read_customers`、`write_customers`（客户同步）
+ * - SHOPIFY_ADMIN_ACCESS_TOKEN：需 `write_orders`、`read_products`；建议 `read_customers` + `write_customers`（可创建/匹配 Customer）。若未批准 `write_customers`，镜像单会回退为仅 `email`、不挂 Customer ID
  * - SHOPIFY_ORDER_INVENTORY_BEHAVIOUR：可选。`decrement_obeying_policy`（默认，按可售量扣减）| `decrement_ignoring_policy` | `bypass`
  * - SHOPIFY_API_VERSION：可选，默认 `2024-10`（请勿把应用 ID 或随机 hex 当作 API 版本）
  *
@@ -441,6 +441,9 @@ function getOrderInventoryBehaviour(): string {
   return "decrement_obeying_policy";
 }
 
+/**
+ * 按 email 查或创建 Shopify Customer。若 **创建** 返回 403（未授予或未批准 `write_customers`），则返回 `null`，由调用方仅用 `order.email` 建单。
+ */
 export async function findOrCreateShopifyCustomerForOrderMirror(
   p: {
     email: string;
@@ -448,7 +451,7 @@ export async function findOrCreateShopifyCustomerForOrderMirror(
     last_name: string;
     phone?: string | null;
   }
-): Promise<string> {
+): Promise<string | null> {
   const token = getAdminToken();
   const searchUrl = new URL(adminRestEndpoint("/customers/search.json"));
   searchUrl.searchParams.set("query", `email:${p.email}`);
@@ -501,6 +504,14 @@ export async function findOrCreateShopifyCustomerForOrderMirror(
   }
   if (postRes.ok && postBody.customer?.id != null) {
     return String(postBody.customer.id);
+  }
+  if (postRes.status === 403) {
+    console.warn(
+      "[shopify] customers.json POST 403 (need write_customers + merchant approval). " +
+        "Order mirror will use email only without customer id. " +
+        postText.slice(0, 300)
+    );
+    return null;
   }
   if (postRes.status === 422) {
     const retry = await fetch(searchUrl.toString(), {
@@ -562,8 +573,10 @@ export async function createPaidOrderInShopify(
       last_name: c.last_name,
       phone: c.phone,
     });
-    const n = Number(idStr);
-    if (Number.isSafeInteger(n)) customerNumericId = n;
+    if (idStr != null) {
+      const n = Number(idStr);
+      if (Number.isSafeInteger(n)) customerNumericId = n;
+    }
   }
 
   const isWallet = input.paymentSource === "wallet";

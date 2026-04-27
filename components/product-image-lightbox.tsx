@@ -69,7 +69,7 @@ export function ProductImageLightbox({
         className={cn(
           "fixed inset-0 left-0 top-0 z-[100] flex h-[100dvh] max-h-none w-full max-w-none translate-x-0 translate-y-0 flex-col items-center justify-center gap-0 overflow-hidden rounded-none border-0 bg-black/95 p-0 shadow-none",
           "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-          "[&>button]:z-[120] [&>button]:h-10 [&>button]:w-10 [&>button]:rounded-full [&>button]:border-0 [&>button]:bg-white/10 [&>button]:text-zinc-100 [&>button]:hover:bg-white/20"
+          "[&>button]:z-[120] [&>button]:inline-flex [&>button]:h-10 [&>button]:w-10 [&>button]:shrink-0 [&>button]:items-center [&>button]:justify-center [&>button]:p-0 [&>button]:leading-none [&>button]:rounded-full [&>button]:border-0 [&>button]:bg-white/10 [&>button]:text-zinc-100 [&>button]:hover:bg-white/20"
         )}
         onOpenAutoFocus={(e) => e.preventDefault()}
       >

@@ -27,6 +27,7 @@ import {
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { ProductCardHoverImage } from "@/components/product-card-hover-image";
 import { useAppDataContext } from "@/lib/context/app-data-context";
 import {
   gigTypeToDisplay,
@@ -790,6 +791,9 @@ export function HomeFeed({
   const [selectedBrand, setSelectedBrand] = useState<Brand | null>(null);
   const [eventDrawerOpen, setEventDrawerOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
+  const [trendingCardImageHoverId, setTrendingCardImageHoverId] = useState<
+    string | null
+  >(null);
 
   const debouncedSearch = useDebounce(searchQuery.trim().toLowerCase(), 300);
 
@@ -1166,29 +1170,72 @@ export function HomeFeed({
           <div className="-mx-5 flex w-full overflow-x-auto snap-x snap-mandatory gap-4 px-5 pb-4 scrollbar-visible">
             {productsForTrending.map((product) => {
               const priceUsd = product.discount_price ?? product.original_price ?? 0;
+              const brandName = product.brand?.name ?? "—";
+              const hasPhoto =
+                !!product.image_url ||
+                (Array.isArray(product.images) && product.images.length > 0);
+              const stock = product.stock_count;
+              const stockLine =
+                stock <= 0 ? "Sold out" : `Only ${stock} left`;
+              const imageHover = trendingCardImageHoverId === product.id;
               return (
                 <Link
                   key={product.id}
                   href={"/product/" + product.id}
-                  className="flex h-56 w-40 min-w-[160px] shrink-0 cursor-pointer snap-center flex-col overflow-hidden rounded-2xl border-2 border-border bg-card text-card-foreground shadow-md transition-all hover:border-primary/40 dark:border-white/10 dark:bg-gradient-to-b dark:from-zinc-900 dark:to-zinc-950 dark:shadow-lg"
+                  className="relative flex h-56 w-40 min-w-[160px] shrink-0 cursor-pointer snap-center flex-col overflow-hidden rounded-2xl border-2 border-border bg-card text-card-foreground shadow-md transition-all hover:border-primary/40 dark:border-white/10 dark:bg-gradient-to-b dark:from-zinc-900 dark:to-zinc-950 dark:shadow-lg"
                 >
-                  <div className="relative h-32 shrink-0 overflow-hidden">
-                    {product.image_url ? (
-                      <>
-                        <img
-                          src={product.image_url}
-                          alt=""
-                          className="h-full w-full object-cover"
-                        />
-                        <div className="absolute inset-0 feed-image-scrim" />
-                      </>
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center bg-muted dark:bg-zinc-800">
-                        <Package className="h-10 w-10 text-muted-foreground" />
+                  <div
+                    className="group relative z-10 h-32 shrink-0 overflow-hidden transition-all duration-500 ease-out hover:absolute hover:inset-0 hover:z-20 hover:h-full hover:rounded-2xl"
+                    onMouseEnter={() =>
+                      setTrendingCardImageHoverId(product.id)
+                    }
+                    onMouseLeave={() =>
+                      setTrendingCardImageHoverId((c) =>
+                        c === product.id ? null : c
+                      )
+                    }
+                  >
+                    <ProductCardHoverImage
+                      product={product}
+                      className="h-full w-full min-h-full"
+                      imgClassName="h-full w-full min-h-full"
+                    >
+                      {hasPhoto ? (
+                        <div className="absolute inset-0 feed-image-scrim opacity-100 transition-opacity duration-300 group-hover:opacity-0" />
+                      ) : null}
+                    </ProductCardHoverImage>
+                    <div className="pointer-events-none absolute inset-0 z-20 bg-gradient-to-t from-black/85 via-black/25 to-black/5 opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-end justify-between gap-2 p-2.5 pt-12 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                      <div className="min-w-0 max-w-[58%]">
+                        <p className="line-clamp-2 text-[11px] font-bold leading-tight text-white drop-shadow-sm">
+                          {product.title}
+                        </p>
+                        <p className="mt-0.5 text-[10px] font-medium text-white/88">
+                          {brandName}
+                        </p>
                       </div>
-                    )}
+                      <div className="shrink-0 text-right">
+                        <p className="text-base font-black tabular-nums text-emerald-300 drop-shadow-md">
+                          ${priceUsd.toFixed(2)}
+                        </p>
+                        <p
+                          className={cn(
+                            "mt-0.5 text-[10px] font-semibold text-white/90",
+                            stock > 0 && stock < 15 && "text-amber-200"
+                          )}
+                        >
+                          {stockLine}
+                        </p>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex flex-1 flex-col justify-between p-3">
+                  <div
+                    className={cn(
+                      "relative z-0 flex min-h-0 flex-1 flex-col justify-between overflow-hidden p-3 transition-all duration-300 ease-out",
+                      imageHover &&
+                        "max-h-0 min-h-0 flex-[0] px-0 py-0 opacity-0"
+                    )}
+                  >
                     <p className="line-clamp-2 text-xs font-bold text-card-foreground">
                       {product.title}
                     </p>

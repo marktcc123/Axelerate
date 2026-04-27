@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { ProductCardHoverImage } from "@/components/product-card-hover-image";
 import {
   Drawer,
   DrawerContent,
@@ -1220,6 +1221,10 @@ export function PerksShop() {
   const [unlockDrawerOpen, setUnlockDrawerOpen] = useState(false);
   const [giftModalProduct, setGiftModalProduct] = useState<Product | null>(null);
   const [giftDrawerOpen, setGiftDrawerOpen] = useState(false);
+  /** 仅当鼠标悬停在商品卡**图片区**时触发放大叠层；避免悬停标题/按钮也触发 */
+  const [shopCardImageHoverId, setShopCardImageHoverId] = useState<string | null>(
+    null
+  );
 
   const { user, profile, publicProducts, isLoadingPublic, refetchPrivate } =
     useAppDataContext();
@@ -1478,10 +1483,20 @@ export function PerksShop() {
                 )
               : 0;
 
+          const stockLine =
+            isSoldOut || product.stock_count <= 0
+              ? "Sold out"
+              : `Only ${product.stock_count} left`;
+
+          const imageHover = shopCardImageHoverId === product.id;
+
           return (
             <div
               key={product.id}
-              className="animate-slide-up group relative overflow-hidden rounded-2xl border-2 border-border bg-card shadow-sm transition-all duration-300 hover:border-brand-primary/30 hover:shadow-md dark:border-white/10 dark:bg-zinc-900/80 dark:hover:shadow-[0_0_24px_rgba(var(--theme-primary-rgb),0.1)]"
+              className={cn(
+                "animate-slide-up relative flex min-h-0 flex-col overflow-hidden rounded-2xl border-2 border-border bg-card shadow-sm transition-all duration-300 hover:border-brand-primary/30 hover:shadow-md dark:border-white/10 dark:bg-zinc-900/80 dark:hover:shadow-[0_0_24px_rgba(var(--theme-primary-rgb),0.1)]",
+                imageHover && "min-h-[22rem]"
+              )}
               style={{ animationDelay: `${i * 80}ms` }}
             >
               {!accessible && (
@@ -1505,7 +1520,12 @@ export function PerksShop() {
               )}
 
               {isDrop && !isSoldOut && (
-                <div className="absolute left-2 top-2 z-[5] flex items-center gap-1 rounded-full bg-brand-primary px-2 py-0.5">
+                <div
+                  className={cn(
+                    "absolute left-2 top-2 z-[5] flex items-center gap-1 rounded-full bg-brand-primary px-2 py-0.5 transition-opacity duration-300",
+                    imageHover && "opacity-0"
+                  )}
+                >
                   <Flame className="h-3 w-3 text-white" />
                   <span className="text-[9px] font-black uppercase text-white">
                     Drop
@@ -1515,27 +1535,62 @@ export function PerksShop() {
 
               <Link
                 href={"/product/" + product.id}
-                className="block"
+                className="group relative z-0 block w-full min-h-36 overflow-hidden rounded-t-2xl transition-[border-radius] duration-300 ease-out hover:absolute hover:inset-0 hover:z-20 hover:min-h-0 hover:h-full hover:rounded-2xl"
+                onMouseEnter={() => setShopCardImageHoverId(product.id)}
+                onMouseLeave={() =>
+                  setShopCardImageHoverId((c) =>
+                    c === product.id ? null : c
+                  )
+                }
               >
-                <div className="relative flex h-36 items-center justify-center overflow-hidden rounded-t-2xl border-b border-border bg-muted/50 backdrop-blur-sm dark:border-white/5 dark:bg-white/5">
+                <div className="relative flex h-36 min-h-36 shrink-0 items-center justify-center overflow-hidden rounded-t-2xl border-b border-border bg-muted/50 backdrop-blur-sm transition-all duration-500 ease-out dark:border-white/5 dark:bg-white/5 group-hover:absolute group-hover:inset-0 group-hover:z-20 group-hover:h-full group-hover:min-h-0 group-hover:rounded-2xl group-hover:border-b-0">
                   {product.stock_count <= 0 && (
-                    <div className="absolute left-2 top-2 z-10 rounded px-2 py-1 bg-red-500/90 text-white text-[10px] font-bold tracking-wider backdrop-blur-sm">
+                    <div className="absolute left-2 top-2 z-10 rounded bg-red-500/90 px-2 py-1 text-[10px] font-bold tracking-wider text-white backdrop-blur-sm transition-opacity duration-300 group-hover:opacity-0">
                       SOLD OUT
                     </div>
                   )}
-                  {product.image_url ? (
-                    <img
-                      src={product.image_url}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <Package className="h-10 w-10 text-muted-foreground" />
-                  )}
+                  <ProductCardHoverImage
+                    product={product}
+                    className="h-full w-full min-h-full"
+                    imgClassName="h-full w-full min-h-full"
+                  />
+                  <div className="pointer-events-none absolute inset-0 z-[21] bg-gradient-to-t from-black/85 via-black/25 to-black/5 opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[22] flex items-end justify-between gap-2 p-3 pt-14 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                    <div className="min-w-0 max-w-[58%]">
+                      <p className="line-clamp-2 text-xs font-bold leading-tight text-white drop-shadow-md">
+                        {product.title}
+                      </p>
+                      <p className="mt-0.5 text-[10px] font-medium text-white/88">
+                        {product.brand?.name ?? "—"}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-xl font-black tabular-nums text-emerald-300 drop-shadow-md">
+                        ${Number(salePrice)}
+                      </p>
+                      <p
+                        className={cn(
+                          "mt-0.5 text-[10px] font-semibold text-white/90",
+                          !isSoldOut &&
+                            product.stock_count > 0 &&
+                            product.stock_count < 15 &&
+                            "text-amber-200"
+                        )}
+                      >
+                        {stockLine}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </Link>
 
-              <div className="p-3">
+              <div
+                className={cn(
+                  "relative z-0 overflow-hidden p-3 transition-all duration-300 ease-out",
+                  imageHover &&
+                    "max-h-0 min-h-0 px-0 py-0 opacity-0"
+                )}
+              >
                 <div className="mb-2 flex flex-wrap gap-1">
                   {discountPct > 0 && (
                     <span className="rounded-md bg-brand-primary/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-brand-primary">
