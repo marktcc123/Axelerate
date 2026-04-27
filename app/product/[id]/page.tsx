@@ -12,6 +12,16 @@ import { useCartStore } from "@/store/cart-store";
 import { useAppDataContext } from "@/lib/context/app-data-context";
 import { joinWaitlist } from "@/app/actions/shop";
 import { buildReviewerBadge, firstNameFromFullName } from "@/lib/schools";
+import { ProductVariantPicker } from "@/components/product-variant-picker";
+import {
+  findVariantInSpecifications,
+  getPreferredDefaultVariantId,
+  getUnitPriceUsd,
+  getVariantInventory,
+  parseProductSpecifications,
+} from "@/lib/shopify/product-specifications";
+import { buildOptionGroups } from "@/lib/shopify/variant-ui";
+import { ProductImageLightbox } from "@/components/product-image-lightbox";
 
 function StarRating({ rating }: { rating: number }) {
   const full = Math.floor(rating);
@@ -65,6 +75,9 @@ export default function ProductDetailPage() {
   const [canReview, setCanReview] = useState(false);
   const [isOnWaitlist, setIsOnWaitlist] = useState(false);
   const [isWaitlisting, setIsWaitlisting] = useState(false);
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
+  const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
+  const [imageLightboxStartIndex, setImageLightboxStartIndex] = useState(0);
 
   const addItem = useCartStore((s) => s.addItem);
   const { user, profile } = useAppDataContext();
@@ -153,7 +166,44 @@ export default function ProductDetailPage() {
       });
   }, [user?.id, productId]);
 
-  const priceUsd = product?.discount_price ?? product?.original_price ?? 0;
+  const spec = useMemo(
+    () => parseProductSpecifications(product?.specifications ?? null),
+    [product?.specifications]
+  );
+
+  useEffect(() => {
+    if (!product) return;
+    const s = parseProductSpecifications(product.specifications);
+    setSelectedVariantId(getPreferredDefaultVariantId(s));
+    setQuantity(1);
+  }, [product?.id, product?.specifications]);
+
+  /** 有可渲染的选项维度即显示（含仅 title、无 option1/2/3 时的「Style」回退） */
+  const showVariantPicker = useMemo(() => {
+    if (!spec) return false;
+    return buildOptionGroups(spec).length > 0;
+  }, [spec]);
+
+  const priceUsd = useMemo(() => {
+    if (!product) return 0;
+    const fallback = Number(product.discount_price ?? product.original_price ?? 0);
+    if (!spec || !selectedVariantId) return fallback;
+    return getUnitPriceUsd(spec, selectedVariantId, fallback);
+  }, [product, spec, selectedVariantId]);
+
+  const variantInventory = useMemo(() => {
+    if (!spec || !selectedVariantId) return null;
+    return getVariantInventory(spec, selectedVariantId);
+  }, [spec, selectedVariantId]);
+
+  useEffect(() => {
+    if (!product) return;
+    const max =
+      variantInventory != null
+        ? Math.max(1, variantInventory)
+        : Math.max(1, product.stock_count);
+    setQuantity((q) => Math.min(Math.max(1, q), max));
+  }, [product?.id, variantInventory, product?.stock_count]);
 
   const { avgRating, reviewCount } = useMemo(() => {
     if (reviews.length === 0)
@@ -174,9 +224,28 @@ export default function ProductDetailPage() {
 
   const mainImage = images[selectedImageIndex] ?? images[0];
 
+  const openImageLightbox = useCallback(
+    (index: number) => {
+      if (images.length === 0) return;
+      const i = Math.max(0, Math.min(index, images.length - 1));
+      setImageLightboxStartIndex(i);
+      setSelectedImageIndex(i);
+      setImageLightboxOpen(true);
+    },
+    [images.length]
+  );
+
   const handleAddToCart = () => {
     if (!product) return;
-    addItem(product, quantity);
+    const v =
+      selectedVariantId ||
+      (spec ? getPreferredDefaultVariantId(spec) : null);
+    const vLabel =
+      v && spec ? findVariantInSpecifications(spec, v)?.title?.trim() || null : null;
+    addItem(product, quantity, {
+      shopifyVariantId: v,
+      variantLabel: vLabel,
+    });
     toast.success("Added to cart!", { description: product.title });
   };
 
@@ -238,15 +307,25 @@ export default function ProductDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-black text-white p-4 md:p-8">
-        <div className="flex flex-col md:flex-row gap-8 max-w-7xl mx-auto">
-          <div className="w-full md:w-2/5 bg-[#111] border border-white/5 rounded-2xl h-[400px] animate-pulse" />
-          <div className="w-full md:w-2/5 flex flex-col gap-4">
-            <div className="h-8 w-48 bg-white/10 rounded animate-pulse" />
-            <div className="h-12 w-full bg-white/10 rounded animate-pulse" />
-            <div className="h-12 w-32 bg-white/10 rounded animate-pulse" />
+      <div className="min-h-screen bg-black p-4 text-white md:p-8">
+        <div className="mx-auto grid max-w-7xl grid-cols-1 gap-10 lg:grid-cols-2">
+          <div className="min-h-[min(70vh,420px)] md:hidden">
+            <div className="h-full animate-pulse rounded-2xl border border-white/5 bg-white/5" />
           </div>
-          <div className="w-full md:w-1/5 h-64 bg-white/5 rounded-xl animate-pulse" />
+          <div className="hidden grid-cols-2 gap-0.5 overflow-hidden rounded-2xl border border-white/5 md:grid">
+            <div className="aspect-[4/5] animate-pulse bg-white/5" />
+            <div className="aspect-[4/5] animate-pulse bg-white/5" />
+            <div className="aspect-[4/5] animate-pulse bg-white/5" />
+            <div className="aspect-[4/5] animate-pulse bg-white/5" />
+          </div>
+          <div className="flex flex-col gap-4">
+            <div className="h-6 w-40 animate-pulse rounded bg-white/10" />
+            <div className="h-10 w-3/4 animate-pulse rounded bg-white/10" />
+            <div className="h-7 w-24 animate-pulse rounded bg-white/10" />
+            <div className="h-px w-full bg-white/10" />
+            <div className="h-32 w-full animate-pulse rounded-xl bg-white/5" />
+            <div className="h-12 w-full max-w-sm animate-pulse rounded-xl bg-white/10" />
+          </div>
         </div>
       </div>
     );
@@ -273,12 +352,26 @@ export default function ProductDetailPage() {
     );
   }
 
-  const maxQty = Math.max(1, product.stock_count);
-  const isSoldOut = product.stock_count <= 0;
   const category = product.category ?? "Product";
   const brandLink =
     product.brand_link_url ?? (product.brand ? "/" : undefined);
-  const specs = (product.specifications ?? {}) as Record<string, string>;
+  const rawSpec = product.specifications;
+  const specTableEntries: [string, string][] =
+    !rawSpec || typeof rawSpec !== "object" || Array.isArray(rawSpec)
+      ? []
+      : Object.entries(rawSpec as Record<string, unknown>)
+          .filter(([k]) => k !== "shopify_variants" && k !== "shopify_options")
+          .map(([k, v]) => {
+            if (v == null) return [k, "—"] as [string, string];
+            if (typeof v === "object") return [k, JSON.stringify(v)] as [string, string];
+            return [k, String(v)] as [string, string];
+          });
+  const maxQty =
+    variantInventory != null
+      ? Math.max(1, variantInventory)
+      : Math.max(1, product.stock_count);
+  const isSoldOut =
+    variantInventory != null ? variantInventory <= 0 : product.stock_count <= 0;
   const features = product.features ?? [];
 
   return (
@@ -307,88 +400,244 @@ export default function ProductDetailPage() {
           </span>
         </nav>
 
-        {/* Three-column layout */}
-        <div className="flex flex-col md:flex-row gap-8 max-w-7xl mx-auto">
-          {/* Left: Media Gallery (md:w-2/5) - 解决拥挤：增大主图区、留白 */}
-          <div className="w-full md:w-2/5 shrink-0">
-            <div className="rounded-2xl border border-white/10 overflow-hidden bg-[#111]">
-              <div className="relative flex min-h-[320px] w-full items-center justify-center p-6 md:min-h-[400px]">
-                <div className="absolute top-4 right-4 z-10 rounded-full border border-white/10 bg-black px-3 py-1 text-xs font-bold text-white">
-                  STUDENT EXCLUSIVE
+        {/* 左：手机单图+圆点；桌面两列网格栅格（与参考图一致） */}
+        <div className="grid max-w-7xl mx-auto grid-cols-1 items-start gap-10 lg:grid-cols-2 lg:gap-12 xl:gap-16">
+          <div className="w-full min-w-0">
+            {/* 手机 & 小屏：主图 + 圆点切图 */}
+            <div className="md:hidden">
+              <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c0c0c]">
+                <div className="relative flex min-h-[min(70vw,360px)] w-full items-center justify-center p-4">
+                  <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-full border border-white/10 bg-black/80 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white">
+                    STUDENT EXCLUSIVE
+                  </div>
+                  {mainImage ? (
+                    <button
+                      type="button"
+                      onClick={() => openImageLightbox(selectedImageIndex)}
+                      className="group relative flex w-full max-w-full cursor-zoom-in items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+                      aria-label="View larger image"
+                    >
+                      <img
+                        src={mainImage}
+                        alt={product.title}
+                        className="max-h-[min(64vh,480px)] w-full max-w-full object-contain transition-opacity group-active:opacity-90"
+                      />
+                    </button>
+                  ) : (
+                    <div className="flex flex-col items-center gap-2 text-gray-500">
+                      <Package className="h-16 w-16" />
+                      <span className="text-sm">No image</span>
+                    </div>
+                  )}
                 </div>
-                {mainImage ? (
-                  <img
-                    src={mainImage}
-                    alt={product.title}
-                    className="max-h-[360px] max-w-full object-contain md:max-h-[420px]"
-                  />
-                ) : (
-                  <div className="flex flex-col items-center gap-2 text-gray-500">
-                    <Package className="h-16 w-16" />
-                    <span className="text-sm">No image</span>
+                {images.length > 1 && (
+                  <div className="flex justify-center gap-1.5 border-t border-white/10 py-3">
+                    {images.map((_, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        aria-label={`View image ${i + 1}`}
+                        onClick={() => setSelectedImageIndex(i)}
+                        className={cn(
+                          "h-1.5 rounded-full transition-all",
+                          selectedImageIndex === i
+                            ? "w-6 bg-zinc-200"
+                            : "w-1.5 bg-zinc-600"
+                        )}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
-              {images.length > 1 && (
-                <div className="flex gap-2 overflow-x-auto border-t border-white/10 p-4 scrollbar-none">
+            </div>
+
+            {/* 桌面：两列图库，可向下延伸滚动 */}
+            <div className="hidden overflow-hidden rounded-2xl border border-white/10 bg-[#0a0a0a] md:block">
+              {images.length === 0 ? (
+                <div className="flex min-h-[240px] flex-col items-center justify-center gap-2 p-8 text-zinc-500">
+                  <Package className="h-16 w-16" />
+                  <span className="text-sm">No image</span>
+                </div>
+              ) : (
+                <div
+                  className={cn(
+                    "grid gap-0.5",
+                    images.length === 1 ? "grid-cols-1" : "grid-cols-2"
+                  )}
+                >
                   {images.map((url, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setSelectedImageIndex(i)}
-                      className={`h-14 w-14 shrink-0 overflow-hidden rounded-lg border-2 transition-colors ${
-                        selectedImageIndex === i
-                          ? "border-[var(--theme-primary)]"
-                          : "border-white/10 hover:border-white/30"
-                      }`}
+                    <div
+                      key={`${url}-${i}`}
+                      className="relative aspect-[3/4] min-h-[180px] w-full overflow-hidden bg-[#111] lg:min-h-[220px] lg:aspect-[4/5]"
                     >
-                      <img
-                        src={url}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
-                    </button>
+                      {i === 0 && (
+                        <div className="pointer-events-none absolute right-2 top-2 z-10 rounded-full border border-white/10 bg-black/75 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white">
+                          STUDENT EXCLUSIVE
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => openImageLightbox(i)}
+                        className="group relative h-full w-full cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/40"
+                        aria-label={`View image ${i + 1} larger`}
+                      >
+                        <img
+                          src={url}
+                          alt={i === 0 ? product.title : `Product image ${i + 1}`}
+                          className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02] group-active:scale-100"
+                          sizes="(min-width: 1024px) 40vw, 100vw"
+                        />
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
             </div>
           </div>
 
-          {/* Middle: Core Content (md:w-2/5) */}
-          <div className="w-full min-w-0 md:w-2/5 flex flex-col">
+          {/* 右：产品信息与购买（单列自上而下，与参考图一致） */}
+          <div className="flex w-full min-w-0 flex-col lg:sticky lg:top-4 lg:max-w-lg lg:justify-self-end">
             {product.brand && (
               <Link
                 href={brandLink ?? "/"}
-                className="text-blue-400 hover:text-blue-300 text-sm font-medium mb-2 transition-colors hover:underline"
+                className="mb-2 text-sm font-medium text-zinc-400 transition-colors hover:text-zinc-200 hover:underline"
               >
                 Visit the {product.brand.name} Store
               </Link>
             )}
 
-            <h1 className="text-3xl font-black text-white mb-3 leading-tight">
+            <h1 className="text-3xl font-semibold leading-tight tracking-tight text-white sm:text-4xl">
               {product.title}
             </h1>
+            <p className="mt-2 text-lg font-normal tabular-nums text-zinc-400">
+              ${Number(priceUsd).toFixed(2)}
+            </p>
+            {product.price_credits > 0 && (
+              <p className="mt-1 text-sm text-amber-400/90">
+                <Zap size={14} className="mr-0.5 inline fill-amber-400" />
+                Or redeem for {product.price_credits} Pts
+              </p>
+            )}
 
-            {/* Rating */}
+            <hr className="my-5 border-0 border-t border-white/10" />
+
+            {showVariantPicker && spec && selectedVariantId && (
+              <div className="mb-5">
+                <ProductVariantPicker
+                  spec={spec}
+                  selectedVariantId={selectedVariantId}
+                  onSelectVariant={(id) => setSelectedVariantId(id)}
+                  variant="storefront"
+                />
+              </div>
+            )}
+
+            {(() => {
+              const stockMsg =
+                variantInventory != null ? variantInventory : product.stock_count;
+              return (
+                <>
+                  {!isSoldOut && stockMsg > 0 && stockMsg < 15 && (
+                    <p className="mb-3 text-sm font-medium text-rose-400/95">
+                      Only {stockMsg} left in stock
+                    </p>
+                  )}
+                  {isSoldOut && (
+                    <p className="mb-3 text-sm font-medium text-rose-400/90">Out of stock</p>
+                  )}
+                </>
+              );
+            })()}
+
+            <p className="mb-5 flex items-center gap-1.5 text-sm text-emerald-400/90">
+              <Truck className="h-4 w-4 shrink-0" />
+              FREE Delivery for Axelerate Partners
+            </p>
+
+            <div className="mb-4 flex max-w-sm flex-wrap items-center gap-3">
+              <span className="text-sm text-zinc-500">Quantity</span>
+              <div className="inline-flex items-center overflow-hidden rounded-lg border border-white/10 bg-zinc-900/80">
+                <button
+                  type="button"
+                  onClick={() => setQuantity(Math.max(1, quantity - 1))}
+                  className="px-3 py-2 text-zinc-400 transition-colors hover:bg-white/5 hover:text-white"
+                >
+                  −
+                </button>
+                <span className="min-w-[2.5rem] px-1 py-2 text-center text-sm font-semibold tabular-nums">
+                  {quantity}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setQuantity(Math.min(maxQty, quantity + 1))}
+                  className="px-3 py-2 text-zinc-400 transition-colors hover:bg-white/5 hover:text-white"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            {!isSoldOut ? (
+              <button
+                type="button"
+                onClick={handleAddToCart}
+                className="mb-3 w-full max-w-sm rounded-xl bg-[var(--theme-primary)] py-3.5 text-sm font-bold uppercase tracking-wide text-black transition-opacity hover:opacity-90"
+              >
+                <span className="inline-flex items-center justify-center gap-2">
+                  <ShoppingCart className="h-5 w-5" />
+                  Add to cart
+                </span>
+              </button>
+            ) : (
+              <div className="mb-3 flex w-full max-w-sm flex-col gap-2">
+                <button
+                  type="button"
+                  disabled
+                  className="w-full cursor-not-allowed rounded-xl border border-zinc-600 bg-zinc-800 py-3.5 text-sm font-bold uppercase tracking-wide text-zinc-300"
+                >
+                  Sold out
+                </button>
+                {isOnWaitlist ? (
+                  <p className="flex items-center justify-center gap-1.5 text-sm text-emerald-400/90">
+                    <Check className="h-4 w-4" /> You&apos;re on the waitlist
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleJoinWaitlist}
+                    disabled={isWaitlisting}
+                    className="w-full rounded-xl border border-white/10 py-2.5 text-sm font-semibold text-zinc-200 transition-colors hover:bg-white/5 disabled:opacity-50"
+                  >
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <BellRing className="h-4 w-4" />
+                      {isWaitlisting ? "Adding…" : "Notify me when available"}
+                    </span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            <p className="mb-8 text-center text-xs text-zinc-500 sm:text-left">
+              Lowest price guaranteed for Axelerate students.
+            </p>
+
             {(reviewCount > 0 || avgRating > 0) && (
-              <div className="flex items-center gap-2 mb-4">
+              <div className="mb-4 flex items-center gap-2">
                 <StarRating rating={avgRating} />
-                <span className="text-sm text-gray-400">
-                  {avgRating.toFixed(1)} ({reviewCount} review
-                  {reviewCount !== 1 ? "s" : ""})
+                <span className="text-sm text-zinc-500">
+                  {avgRating.toFixed(1)} ({reviewCount} review{reviewCount !== 1 ? "s" : ""})
                 </span>
               </div>
             )}
 
-            {/* Short description */}
             {product.description && (
-              <p className="mb-4 text-sm leading-relaxed text-gray-400">
+              <p className="mb-4 text-sm leading-relaxed text-zinc-400 sm:text-base">
                 {product.description}
               </p>
             )}
 
-            {/* Bullet Points */}
             {features.length > 0 && (
-              <ul className="space-y-2 mb-6 text-sm text-gray-300">
+              <ul className="mb-6 space-y-2 text-sm text-zinc-300 sm:text-base">
                 {features.map((f, i) => (
                   <li key={i} className="flex gap-2">
                     <span className="text-[var(--theme-primary)]">•</span>
@@ -398,103 +647,31 @@ export default function ProductDetailPage() {
               </ul>
             )}
 
-            {/* Long description HTML (A+ content) */}
             {product.long_description_html && (
               <div
-                className="prose prose-invert prose-sm max-w-none text-gray-300 [&_img]:max-w-full [&_img]:rounded-lg"
+                className={cn(
+                  "prose prose-invert max-w-none border-t border-white/5 pt-6 text-zinc-300",
+                  "prose-headings:font-semibold prose-headings:tracking-tight prose-headings:text-white",
+                  "prose-h1:text-2xl md:prose-h1:text-3xl prose-h1:mb-3 prose-h1:mt-0 prose-h1:font-bold",
+                  "prose-h2:text-base md:prose-h2:text-lg prose-h2:mb-2 prose-h2:mt-8 prose-h2:font-semibold prose-h2:text-zinc-100",
+                  "prose-h3:text-sm prose-h3:font-semibold prose-h3:text-zinc-200",
+                  "prose-p:text-sm md:prose-p:text-base prose-p:leading-relaxed prose-p:text-zinc-400",
+                  "prose-strong:font-semibold prose-strong:text-zinc-200 prose-li:text-sm md:prose-li:text-base",
+                  "[&_ul]:list-disc [&_ul]:pl-4 [&_li]:marker:text-zinc-600",
+                  "[&_img]:max-w-full [&_img]:rounded-lg"
+                )}
                 dangerouslySetInnerHTML={{
                   __html: product.long_description_html,
                 }}
               />
             )}
-
-          </div>
-
-          {/* Right: Super Buy Box (md:w-1/5) */}
-          <div className="w-full shrink-0 md:w-1/5">
-            <div className="sticky top-4 rounded-xl border border-white/10 bg-[#0a0a0a] p-5">
-              <div className="text-3xl font-black text-emerald-400 mb-1">
-                ${Number(priceUsd).toFixed(2)}
-              </div>
-              <div className="text-amber-400 text-sm font-bold flex items-center gap-1 mb-4">
-                <Zap size={14} className="fill-amber-400" /> Or redeem for{" "}
-                {product.price_credits} Pts
-              </div>
-
-              {product.stock_count > 0 && product.stock_count < 15 && (
-                <div className="text-red-400 font-bold text-sm mb-3">
-                  Only {product.stock_count} left in stock - order soon.
-                </div>
-              )}
-              {product.stock_count === 0 && (
-                <div className="text-red-400 font-bold text-sm mb-3">
-                  Currently out of stock.
-                </div>
-              )}
-
-              <div className="text-emerald-400/90 text-sm flex items-center gap-1.5 mb-4">
-                <Truck size={14} />
-                FREE Delivery for Axelerate Partners
-              </div>
-
-              {/* Quantity */}
-              <div className="flex items-center gap-4 mb-4">
-                <span className="text-sm text-gray-400">Quantity:</span>
-                <div className="flex items-center rounded-lg border border-white/10 bg-[#111]">
-                  <button
-                    onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                    className="px-3 py-1 text-gray-400 hover:text-white transition-colors"
-                  >
-                    -
-                  </button>
-                  <span className="px-4 py-1 font-bold">{quantity}</span>
-                  <button
-                    onClick={() =>
-                      setQuantity(Math.min(maxQty, quantity + 1))
-                    }
-                    className="px-3 py-1 text-gray-400 hover:text-white transition-colors"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-
-              {!isSoldOut ? (
-                <button
-                  onClick={handleAddToCart}
-                  className="w-full font-black py-3 rounded-lg flex justify-center items-center gap-2 transition-all bg-[var(--theme-primary)] text-black hover:opacity-90"
-                >
-                  <ShoppingCart size={18} /> ADD TO CART
-                </button>
-              ) : isOnWaitlist ? (
-                <button
-                  disabled
-                  className="w-full font-black py-3 rounded-lg flex justify-center items-center gap-2 bg-zinc-800 text-emerald-400 border border-emerald-900/50 cursor-not-allowed"
-                >
-                  <Check className="w-4 h-4" />
-                  YOU&apos;RE ON THE LIST
-                </button>
-              ) : (
-                <button
-                  onClick={handleJoinWaitlist}
-                  disabled={isWaitlisting}
-                  className="w-full font-black py-3 rounded-lg flex justify-center items-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-600 transition-all disabled:opacity-60"
-                >
-                  <BellRing className="w-4 h-4" />
-                  {isWaitlisting ? "ADDING..." : "NOTIFY ME WHEN AVAILABLE"}
-                </button>
-              )}
-              <p className="text-xs text-center text-gray-500 mt-3">
-                Lowest Price Guaranteed for Axelerate Students.
-              </p>
-            </div>
           </div>
         </div>
 
         {/* Bottom: Specs & Reviews (另起一行) */}
         <div className="mt-16 w-full space-y-12">
           {/* Specifications */}
-          {Object.keys(specs).length > 0 && (
+          {specTableEntries.length > 0 && (
             <div>
               <h2 className="text-xl font-bold text-white mb-4">
                 Technical Specifications
@@ -502,7 +679,7 @@ export default function ProductDetailPage() {
               <div className="rounded-xl border border-white/10 bg-[#0a0a0a] overflow-hidden">
                 <table className="w-full text-sm">
                   <tbody>
-                    {Object.entries(specs).map(([key, value]) => (
+                    {specTableEntries.map(([key, value]) => (
                       <tr
                         key={key}
                         className="border-b border-white/5 last:border-0"
@@ -511,7 +688,7 @@ export default function ProductDetailPage() {
                           {key}
                         </td>
                         <td className="py-3 px-4 text-white">
-                          {typeof value === "string" ? value : String(value)}
+                          {value}
                         </td>
                       </tr>
                     ))}
@@ -657,6 +834,16 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </div>
+
+      {images.length > 0 && (
+        <ProductImageLightbox
+          open={imageLightboxOpen}
+          onOpenChange={setImageLightboxOpen}
+          images={images}
+          startIndex={imageLightboxStartIndex}
+          productTitle={product.title}
+        />
+      )}
     </div>
   );
 }

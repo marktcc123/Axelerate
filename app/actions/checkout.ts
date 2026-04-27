@@ -1,7 +1,7 @@
 "use server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { fulfillPerksShopOrder } from "@/lib/perks-order-fulfill";
+import { fulfillPerksShopOrder, type CartLine } from "@/lib/perks-order-fulfill";
 import { verifyCartAndComputeUsdDue } from "@/lib/perks-checkout-pricing";
 
 export type CheckoutResult =
@@ -18,7 +18,7 @@ export type CheckoutResult =
  */
 export async function processCheckout(
   userId: string,
-  cartItems: { id: string; quantity: number }[],
+  cartItems: CartLine[],
   creditsToUse: number = 0
 ): Promise<CheckoutResult> {
   const supabase = createAdminClient();

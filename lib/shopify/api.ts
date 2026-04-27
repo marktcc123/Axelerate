@@ -6,7 +6,8 @@ import "server-only";
  * 环境变量（.env.local）：
  * - SHOPIFY_STORE_DOMAIN：如 `your-store.myshopify.com`（不含 https）
  * - SHOPIFY_STOREFRONT_ACCESS_TOKEN：Headless Storefront API 令牌
- * - SHOPIFY_ADMIN_ACCESS_TOKEN：Custom app / private app，需 `write_orders`、`read_products` 等
+ * - SHOPIFY_ADMIN_ACCESS_TOKEN：需 `write_orders`、`read_products`、`read_customers`、`write_customers`（客户同步）
+ * - SHOPIFY_ORDER_INVENTORY_BEHAVIOUR：可选。`decrement_obeying_policy`（默认，按可售量扣减）| `decrement_ignoring_policy` | `bypass`
  * - SHOPIFY_API_VERSION：可选，默认 `2024-10`（请勿把应用 ID 或随机 hex 当作 API 版本）
  *
  * Storefront GraphQL 参考：https://shopify.dev/docs/api/storefront
@@ -357,35 +358,57 @@ export async function getStorefrontCheckoutUrlForCart(
 
 // --- Admin: 在 Stripe 成功收款后，静默建「已支付」订单（供仓库/应用发货）---
 
+export type ShopifyAddressInput = {
+  first_name: string;
+  last_name: string;
+  address1: string;
+  city: string;
+  province: string;
+  country: string;
+  zip: string;
+  phone?: string;
+};
+
 export type StripeMirroredLineItem = {
   /** `gid://shopify/ProductVariant/...` 或纯数字 */
   shopifyVariantId: string;
   quantity: number;
+  /** 与 Stripe 实收一致的单价（店铺货币），不传则用目录价 */
+  unitPrice?: string;
+};
+
+export type StripeShippingLineInput = {
+  title: string;
+  price: string;
+  code?: string;
 };
 
 export type CreatePaidOrderInShopifyInput = {
-  /** Stripe PaymentIntent / Session 等，仅写入订单 note 便于对账与风控 */
   stripeReference: {
     paymentIntentId?: string;
     checkoutSessionId?: string;
   };
   email: string;
   lineItems: StripeMirroredLineItem[];
-  /** 以店铺货币为准的总金额，需与 Variant 行合计一致或按你业务规则校验 */
   totalAmount: string;
   currencyCode: string;
-  /** REST `transactions` 与地址；供应商发货常依赖 shipping */
-  shippingAddress?: {
+  shippingAddress?: ShopifyAddressInput;
+  billingAddress?: ShopifyAddressInput;
+  shippingLines?: StripeShippingLineInput[];
+  taxAmount?: string;
+  customer?: {
     first_name: string;
     last_name: string;
-    address1: string;
-    city: string;
-    province: string;
-    country: string;
-    zip: string;
-    phone?: string;
+    email: string;
+    phone?: string | null;
   };
+  shopifyCustomerId?: string;
+  noteAttributes?: { name: string; value: string }[];
   sendReceipt?: boolean;
+  /** 默认 Stripe；平台余额可传 `wallet` */
+  paymentSource?: "stripe" | "wallet";
+  /** 写进 `transactions[].gateway`；不填则按 paymentSource 用 `Stripe` 或 `Axelerate` */
+  transactionGateway?: string;
 };
 
 type AdminOrderRestResponse = {
@@ -397,13 +420,107 @@ type AdminOrderRestResponse = {
   errors?: string | Record<string, unknown>;
 };
 
+type AdminCustomersSearchResponse = {
+  customers?: { id: number }[];
+};
+
+type AdminCustomerCreateResponse = {
+  customer?: { id: number };
+  errors?: string | Record<string, unknown>;
+};
+
+function getOrderInventoryBehaviour(): string {
+  const v = process.env.SHOPIFY_ORDER_INVENTORY_BEHAVIOUR?.trim();
+  if (
+    v === "bypass" ||
+    v === "decrement_ignoring_policy" ||
+    v === "decrement_obeying_policy"
+  ) {
+    return v;
+  }
+  return "decrement_obeying_policy";
+}
+
+export async function findOrCreateShopifyCustomerForOrderMirror(
+  p: {
+    email: string;
+    first_name: string;
+    last_name: string;
+    phone?: string | null;
+  }
+): Promise<string> {
+  const token = getAdminToken();
+  const searchUrl = new URL(adminRestEndpoint("/customers/search.json"));
+  searchUrl.searchParams.set("query", `email:${p.email}`);
+  searchUrl.searchParams.set("fields", "id,email");
+
+  const getRes = await fetch(searchUrl.toString(), {
+    headers: { "X-Shopify-Access-Token": token },
+    cache: "no-store",
+  });
+  const getText = await getRes.text();
+  let getBody: AdminCustomersSearchResponse;
+  try {
+    getBody = JSON.parse(getText) as AdminCustomersSearchResponse;
+  } catch {
+    throw new Error(
+      `Shopify customers/search non-JSON (${getRes.status}): ${getText.slice(0, 400)}`
+    );
+  }
+  if (getRes.ok && getBody.customers?.[0]?.id != null) {
+    return String(getBody.customers[0].id);
+  }
+
+  const phone = p.phone?.replace(/\s/g, "").slice(0, 25) || undefined;
+  const postRes = await fetch(adminRestEndpoint("/customers.json"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": token,
+    },
+    body: JSON.stringify({
+      customer: {
+        email: p.email,
+        first_name: p.first_name.slice(0, 255) || "Customer",
+        last_name: p.last_name.slice(0, 255) || "-",
+        phone: phone || undefined,
+        verified_email: true,
+        send_email_welcome: false,
+      },
+    }),
+    cache: "no-store",
+  });
+  const postText = await postRes.text();
+  let postBody: AdminCustomerCreateResponse;
+  try {
+    postBody = JSON.parse(postText) as AdminCustomerCreateResponse;
+  } catch {
+    throw new Error(
+      `Shopify customers create non-JSON (${postRes.status}): ${postText.slice(0, 500)}`
+    );
+  }
+  if (postRes.ok && postBody.customer?.id != null) {
+    return String(postBody.customer.id);
+  }
+  if (postRes.status === 422) {
+    const retry = await fetch(searchUrl.toString(), {
+      headers: { "X-Shopify-Access-Token": token },
+      cache: "no-store",
+    });
+    const retryText = await retry.text();
+    const retryBody = JSON.parse(retryText) as AdminCustomersSearchResponse;
+    if (retryBody.customers?.[0]?.id != null) {
+      return String(retryBody.customers[0].id);
+    }
+  }
+  throw new Error(
+    `Shopify customers create failed ${postRes.status}: ${postText.slice(0, 800)}`
+  );
+}
+
 /**
- * 在 Stripe 支付成功后（通常在 `checkout.session.completed` webhook 中），
- * 用 Admin REST 在 Shopify 中创建**已支付**订单，以触发你后台/OSS/供应商流程。
- *
- * 注意：这是「对账/履约」用镜像订单，**不是**用 Shopify Payments 收的钱；
- * 请在 Shopify 后台为 Custom app 申请 `write_orders` 等权限，并处理 GDPR/税务/退款策略。
- * 生产环境务必在 webhook 中校验 `event.type` 与 `session.payment_status === "paid"`。
+ * Stripe → Shopify 已支付镜像单：扣库存、客户、账单/发货地址、运费与税费、 transactions。
+ * `fulfillment_status` 建单时不可写；新单默认 unfulfilled。
  */
 export async function createPaidOrderInShopify(
   input: CreatePaidOrderInShopifyInput
@@ -415,13 +532,46 @@ export async function createPaidOrderInShopify(
   const { stripeReference, email, lineItems, totalAmount, currencyCode } =
     input;
 
-  const line_items = lineItems.map((li) => ({
-    variant_id: Number.parseInt(parseVariantIdForRest(li.shopifyVariantId), 10),
-    quantity: li.quantity,
-  }));
+  const line_items = lineItems.map((li) => {
+    const idStr = parseVariantIdForRest(li.shopifyVariantId);
+    const n = Number(idStr);
+    if (!Number.isSafeInteger(n)) {
+      throw new Error(
+        `shopify variant_id ${idStr} outside JS safe integer; use a smaller test variant or implement GraphQL orderCreate`
+      );
+    }
+    const row: Record<string, unknown> = { variant_id: n, quantity: li.quantity };
+    if (li.unitPrice != null && li.unitPrice !== "") {
+      row.price = li.unitPrice;
+    }
+    return row;
+  });
 
+  let customerNumericId: number | undefined;
+  if (input.shopifyCustomerId) {
+    const c = String(input.shopifyCustomerId).trim();
+    if (/^\d+$/.test(c)) {
+      const n = Number(c);
+      if (Number.isSafeInteger(n)) customerNumericId = n;
+    }
+  } else if (input.customer) {
+    const c = input.customer;
+    const idStr = await findOrCreateShopifyCustomerForOrderMirror({
+      email: c.email,
+      first_name: c.first_name,
+      last_name: c.last_name,
+      phone: c.phone,
+    });
+    const n = Number(idStr);
+    if (Number.isSafeInteger(n)) customerNumericId = n;
+  }
+
+  const isWallet = input.paymentSource === "wallet";
+  const noteLine0 = isWallet
+    ? "Paid via Axelerate wallet (Next.js)."
+    : "Paid via external Stripe (Next.js).";
   const noteParts = [
-    "Paid via external Stripe (Next.js).",
+    noteLine0,
     `charged=${totalAmount} ${currencyCode}`,
     stripeReference.checkoutSessionId
       ? `session=${stripeReference.checkoutSessionId}`
@@ -431,27 +581,80 @@ export async function createPaidOrderInShopify(
       : null,
   ].filter(Boolean);
 
-  const orderPayload = {
-    order: {
-      email,
-      line_items,
-      send_receipt: input.sendReceipt ?? false,
-      financial_status: "paid" as const,
-      note: noteParts.join(" | "),
-      tags: "stripe-mirrored,nextjs",
-      shipping_address: input.shippingAddress,
-      /** 将外部收款记为已捕获（具体字段以你店铺货币与后台设置为准，必要时在测试店调试 gateway） */
-      transactions: [
-        {
-          kind: "sale" as const,
-          status: "success" as const,
-          amount: totalAmount,
-          currency: currencyCode,
-          gateway: "external" as const,
-        },
-      ],
-    },
+  const noteAttrs: { name: string; value: string }[] = [
+    { name: "payment_gateway", value: isWallet ? "axelerate_wallet" : "stripe" },
+    ...(input.noteAttributes ?? []),
+  ];
+  if (input.stripeReference.checkoutSessionId) {
+    noteAttrs.push({
+      name: isWallet ? "internal_ref" : "stripe_checkout_session",
+      value: input.stripeReference.checkoutSessionId,
+    });
+  }
+
+  const tagWallet = isWallet ? "wallet" : "stripe-mirrored";
+  const order: Record<string, unknown> = {
+    email,
+    line_items,
+    send_receipt: input.sendReceipt ?? false,
+    financial_status: "paid",
+    note: noteParts.join(" | "),
+    tags: `nextjs,${tagWallet},inventory-sync,axelerate-mirror`,
+    inventory_behaviour: getOrderInventoryBehaviour(),
+    note_attributes: noteAttrs,
   };
+
+  if (customerNumericId != null) {
+    order.customer = { id: customerNumericId };
+  }
+  if (input.shippingAddress) {
+    order.shipping_address = input.shippingAddress;
+  }
+  if (input.billingAddress) {
+    order.billing_address = input.billingAddress;
+  }
+  if (input.shippingLines && input.shippingLines.length > 0) {
+    // REST 可接受最简 { title, price }；有 code 时一并带上便于后台筛选
+    order.shipping_lines = input.shippingLines.map((s) => {
+      const row: Record<string, string> = { title: s.title, price: s.price };
+      if (s.code) {
+        row.code = s.code;
+        row.source = "shopify";
+      }
+      return row;
+    });
+  }
+  if (
+    input.taxAmount != null &&
+    input.taxAmount !== "" &&
+    input.taxAmount !== "0" &&
+    input.taxAmount !== "0.00"
+  ) {
+    order.taxes_included = false;
+    order.tax_lines = [
+      {
+        title: isWallet ? "Tax" : "Tax (from Stripe)",
+        price: input.taxAmount,
+        rate: 0,
+      },
+    ];
+  }
+
+  const txGateway =
+    input.transactionGateway?.trim() ||
+    (isWallet ? "Axelerate" : "Stripe");
+
+  order.transactions = [
+    {
+      kind: "sale" as const,
+      status: "success" as const,
+      amount: totalAmount,
+      currency: currencyCode,
+      gateway: txGateway,
+    },
+  ];
+
+  const orderPayload = { order };
 
   const res = await fetch(adminRestEndpoint("/orders.json"), {
     method: "POST",

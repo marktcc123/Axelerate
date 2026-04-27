@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "sync:catalog": "node scripts/sync-catalog-from-xlsx.mjs",
+    "sync:shopify-products": "tsx scripts/sync-shopify-products.ts",
     "merge:brands": "node scripts/merge-duplicate-brands.mjs",
     "merge:brands:dry": "node scripts/merge-duplicate-brands.mjs --dry-run"
   },
@@ -52,6 +53,7 @@
     "framer-motion": "^12.35.1",
     "gsap": "^3.14.2",
     "input-otp": "1.4.1",
+    "json-bigint": "^1.0.0",
     "lucide-react": "^0.544.0",
     "motion": "^12.38.0",
     "next": "16.1.6",
@@ -76,12 +78,14 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.13",
+    "@types/json-bigint": "^1.0.4",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv": "^17.3.1",
     "postcss": "^8.5",
     "tailwindcss": "^4.1.13",
+    "tsx": "^4.21.0",
     "typescript": "5.7.3",
     "xlsx": "^0.18.5"
   }

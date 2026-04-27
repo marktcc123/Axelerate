@@ -67,8 +67,8 @@ export interface Product {
   max_per_user: number | null;
   /** 关键功能点 (Bullet Points) */
   features?: string[] | null;
-  /** 技术规格 (JSON) */
-  specifications?: Record<string, string> | null;
+  /** 技术规格 (JSON，含 `shopify_variants` / `shopify_options` 等) */
+  specifications?: Record<string, unknown> | null;
   /** A+ 图文详情 HTML */
   long_description_html?: string | null;
   /** 多角度图片 URL 数组 */

@@ -48,10 +48,12 @@ import Confetti from "react-confetti";
 import { processCheckout } from "@/app/actions/checkout";
 import {
   createStripeCheckoutSession,
+  createDropshippingStripeCheckoutSession,
   isStripePaymentsEnabled,
 } from "@/app/actions/stripe-checkout";
 import { joinWaitlist } from "@/app/actions/shop";
 import { useCartStore } from "@/store/cart-store";
+import { getUnitPriceUsd, parseProductSpecifications } from "@/lib/shopify/product-specifications";
 import { createClient } from "@/lib/supabase/client";
 import { useSearchParams, useRouter } from "next/navigation";
 
@@ -287,11 +289,17 @@ function CartDrawer({
   refetchPrivate,
   stripeEnabled,
 }: {
-  cart: { product: Product; qty: number }[];
+  cart: {
+    product: Product;
+    qty: number;
+    lineKey: string;
+    shopifyVariantId: string | null;
+    variantLabel: string | null;
+  }[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onRemove: (productId: string) => void;
-  onUpdateQuantity: (productId: string, quantity: number) => void;
+  onRemove: (lineKey: string) => void;
+  onUpdateQuantity: (lineKey: string, quantity: number) => void;
   profile: { cash_balance: number; credit_balance?: number } | null;
   userId: string | null;
   onCheckoutSuccess: () => void;
@@ -308,10 +316,13 @@ function CartDrawer({
 
   const subtotal = useMemo(
     () =>
-      cart.reduce((acc, { product, qty }) => {
-        const price =
-          product.discount_price ?? product.original_price ?? 0;
-        return acc + Number(price) * qty;
+      cart.reduce((acc, line) => {
+        const spec = parseProductSpecifications(line.product.specifications);
+        const fallback = Number(
+          line.product.discount_price ?? line.product.original_price ?? 0
+        );
+        const unit = getUnitPriceUsd(spec, line.shopifyVariantId, fallback);
+        return acc + unit * line.qty;
       }, 0),
     [cart]
   );
@@ -328,6 +339,13 @@ function CartDrawer({
     Boolean(userId) && userCredits >= creditsToUse && finalTotal <= userBalance;
   const canPayCard =
     Boolean(userId) && stripeEnabled && userCredits >= creditsToUse && finalTotal > 0;
+
+  const isDropshipOnlyCart = useMemo(() => {
+    if (cart.length === 0) return false;
+    return cart.every(
+      (line) => (line.product.fulfillment_type ?? "").toLowerCase() === "dropshipping"
+    );
+  }, [cart]);
 
   useEffect(() => {
     setCreditsToUse((prev) => Math.min(prev, maxCreditsAllowed));
@@ -363,6 +381,7 @@ function CartDrawer({
       const cartItems = cart.map((c) => ({
         id: c.product.id,
         quantity: c.qty,
+        shopifyVariantId: c.shopifyVariantId ?? undefined,
       }));
       const result = await processCheckout(userId, cartItems, creditsToUse);
       if (result.success) {
@@ -396,8 +415,11 @@ function CartDrawer({
       const cartItems = cart.map((c) => ({
         id: c.product.id,
         quantity: c.qty,
+        shopifyVariantId: c.shopifyVariantId ?? undefined,
       }));
-      const result = await createStripeCheckoutSession(cartItems, creditsToUse);
+      const result = isDropshipOnlyCart
+        ? await createDropshippingStripeCheckoutSession(cartItems, creditsToUse)
+        : await createStripeCheckoutSession(cartItems, creditsToUse);
       if ("error" in result) {
         toast.error(result.error);
         return;
@@ -440,14 +462,17 @@ function CartDrawer({
               </div>
             ) : (
               <div className="space-y-3">
-                {cart.map(({ product, qty }) => {
-                  const price =
-                    product.discount_price ??
-                    product.original_price ??
-                    0;
+                {cart.map((line) => {
+                  const { product, qty, lineKey, shopifyVariantId, variantLabel } =
+                    line;
+                  const spec = parseProductSpecifications(product.specifications);
+                  const fallback = Number(
+                    product.discount_price ?? product.original_price ?? 0
+                  );
+                  const unit = getUnitPriceUsd(spec, shopifyVariantId, fallback);
                   return (
                     <div
-                      key={product.id}
+                      key={lineKey}
                       className="rounded-xl border-2 border-border bg-muted/40 p-3 shadow-sm dark:border-white/10 dark:bg-white/5"
                     >
                       <div className="flex items-center gap-3">
@@ -468,19 +493,24 @@ function CartDrawer({
                           <p className="truncate text-sm font-bold text-foreground dark:text-white">
                             {product.title}
                           </p>
+                          {variantLabel ? (
+                            <p className="truncate text-[11px] text-muted-foreground">
+                              {variantLabel}
+                            </p>
+                          ) : null}
                           <p className="text-xs text-muted-foreground">
                             {product.brand?.name ?? "—"}
                           </p>
                         </div>
                         <span className="shrink-0 text-sm font-black text-brand-primary">
-                          ${(Number(price) * qty).toFixed(2)}
+                          ${(unit * qty).toFixed(2)}
                         </span>
                       </div>
                       <div className="mt-2 flex items-center gap-3">
                         <div className="flex items-center rounded-md border-2 border-border bg-muted dark:border-white/10 dark:bg-zinc-900">
                           <button
                             onClick={() =>
-                              onUpdateQuantity(product.id, qty - 1)
+                              onUpdateQuantity(lineKey, qty - 1)
                             }
                             className="px-2 py-1 text-muted-foreground transition-colors hover:text-foreground dark:hover:text-white"
                           >
@@ -491,7 +521,7 @@ function CartDrawer({
                           </span>
                           <button
                             onClick={() =>
-                              onUpdateQuantity(product.id, qty + 1)
+                              onUpdateQuantity(lineKey, qty + 1)
                             }
                             className="px-2 py-1 text-muted-foreground transition-colors hover:text-foreground dark:hover:text-white"
                           >
@@ -499,7 +529,7 @@ function CartDrawer({
                           </button>
                         </div>
                         <button
-                          onClick={() => onRemove(product.id)}
+                          onClick={() => onRemove(lineKey)}
                           className="text-muted-foreground transition-colors hover:text-red-500"
                         >
                           <Trash2 size={16} />
@@ -1299,7 +1329,13 @@ export function PerksShop() {
   };
 
   const cartCount = cartItems.reduce((sum, c) => sum + c.quantity, 0);
-  const cart = cartItems.map((i) => ({ product: i.product, qty: i.quantity }));
+  const cart = cartItems.map((i) => ({
+    product: i.product,
+    qty: i.quantity,
+    lineKey: i.lineKey,
+    shopifyVariantId: i.shopifyVariantId,
+    variantLabel: i.variantLabel,
+  }));
 
   if (isLoadingPublic) {
     return (
