@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import { ShoppingCart, Package, Zap, Star, Truck, Lock, BellRing, Check } from "lucide-react";
 import Link from "next/link";
@@ -235,6 +235,40 @@ export default function ProductDetailPage() {
     [images.length]
   );
 
+  const mobileSwipeStartRef = useRef({ x: 0, y: 0 });
+  const mobileSkipLightboxClickRef = useRef(false);
+
+  const onMobileGalleryTouchStart = useCallback(
+    (e: React.TouchEvent) => {
+      if (images.length <= 1) return;
+      const t = e.touches[0];
+      mobileSwipeStartRef.current = { x: t.clientX, y: t.clientY };
+    },
+    [images.length]
+  );
+
+  const onMobileGalleryTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      if (images.length <= 1) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - mobileSwipeStartRef.current.x;
+      const dy = t.clientY - mobileSwipeStartRef.current.y;
+      if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.1) return;
+      if (dx < 0) {
+        setSelectedImageIndex((i) => (i + 1) % images.length);
+      } else {
+        setSelectedImageIndex(
+          (i) => (i - 1 + images.length) % images.length
+        );
+      }
+      mobileSkipLightboxClickRef.current = true;
+      window.setTimeout(() => {
+        mobileSkipLightboxClickRef.current = false;
+      }, 400);
+    },
+    [images.length]
+  );
+
   const handleAddToCart = () => {
     if (!product) return;
     const v =
@@ -406,14 +440,21 @@ export default function ProductDetailPage() {
             {/* 手机 & 小屏：主图 + 圆点切图 */}
             <div className="md:hidden">
               <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0c0c0c]">
-                <div className="relative flex min-h-[min(70vw,360px)] w-full items-center justify-center p-4">
+                <div
+                  className="relative flex min-h-[min(70vw,360px)] w-full touch-pan-y select-none items-center justify-center p-4"
+                  onTouchStart={onMobileGalleryTouchStart}
+                  onTouchEnd={onMobileGalleryTouchEnd}
+                >
                   <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-full border border-white/10 bg-black/80 px-2.5 py-1 text-[10px] font-bold tracking-wide text-white">
                     STUDENT EXCLUSIVE
                   </div>
                   {mainImage ? (
                     <button
                       type="button"
-                      onClick={() => openImageLightbox(selectedImageIndex)}
+                      onClick={() => {
+                        if (mobileSkipLightboxClickRef.current) return;
+                        openImageLightbox(selectedImageIndex);
+                      }}
                       className="group relative flex w-full max-w-full cursor-zoom-in items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
                       aria-label="View larger image"
                     >
