@@ -1,13 +1,16 @@
 import { revalidatePath } from "next/cache";
+import type Stripe from "stripe";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ProductRow } from "@/lib/shopify/wallet-dropship-order";
 import {
+  cartLineHasResolvableShopifyVariant,
   findVariantInSpecifications,
+  getUnitPriceUsd,
   getVariantInventory,
   parseProductSpecifications,
   resolveVariantIdForCheckout,
 } from "@/lib/shopify/product-specifications";
-
+import { getDefaultShopifyVariantIdFromProduct } from "@/lib/shopify/dropship-from-product";
 export type CheckoutFulfillResult =
   | { success: true }
   | { success: false; error: string };
@@ -18,6 +21,33 @@ export type CartLine = {
   /** Shopify Admin 变体数字 id 字符串；缺省则结账时取商品默认变体 */
   shopifyVariantId?: string;
 };
+
+/** 购物车目录价合计（USD），用于混合车在「可镜像 Shopify 行」与其它行间分摊实付。 */
+function catalogUsdSubtotalForLines(
+  lines: CartLine[],
+  pmap: Map<
+    string,
+    {
+      specifications: unknown;
+      discount_price: number | null;
+      original_price: number | null;
+    }
+  >
+): number {
+  let sum = 0;
+  for (const c of lines) {
+    const p = pmap.get(c.id);
+    if (!p) continue;
+    const spec = parseProductSpecifications(p.specifications);
+    const vid =
+      resolveVariantIdForCheckout(spec, c.shopifyVariantId ?? null) ??
+      getDefaultShopifyVariantIdFromProduct(p.specifications);
+    const fallback = Number(p.discount_price ?? p.original_price ?? 0);
+    const unit = vid ? getUnitPriceUsd(spec, vid, fallback) : fallback;
+    sum += unit * c.quantity;
+  }
+  return sum;
+}
 
 /**
  * 扣库存、写订单、记 product_purchases（余额结账与 Stripe webhook 共用）。
@@ -32,6 +62,8 @@ export async function fulfillPerksShopOrder(
     deductCredits: number;
     orderCashPaid: number;
     stripeCheckoutSessionId?: string | null;
+    /** Stripe 卡支付回填 Session，供 Shopify 镜像单使用收货信息与 session id（混合车）。 */
+    stripeCheckoutSession?: Stripe.Checkout.Session | null;
   }
 ): Promise<CheckoutFulfillResult> {
   const {
@@ -41,6 +73,7 @@ export async function fulfillPerksShopOrder(
     deductCredits,
     orderCashPaid,
     stripeCheckoutSessionId,
+    stripeCheckoutSession,
   } = options;
 
   if (stripeCheckoutSessionId) {
@@ -67,19 +100,48 @@ export async function fulfillPerksShopOrder(
 
   const productMap = new Map(products.map((p) => [p.id, p]));
 
+  const mirrorLines = cartItems.filter((item) => {
+    const product = productMap.get(item.id);
+    return product ? cartLineHasResolvableShopifyVariant(product, item) : false;
+  });
+
+  const fullUsd = catalogUsdSubtotalForLines(cartItems, productMap);
+  const mirrorUsd = catalogUsdSubtotalForLines(mirrorLines, productMap);
+  const mirrorPaidShare =
+    mirrorLines.length === 0
+      ? { cash: 0, credits: 0 }
+      : mirrorLines.length === cartItems.length
+        ? { cash: orderCashPaid, credits: deductCredits }
+        : (() => {
+            let ratio =
+              fullUsd > 0 && mirrorUsd > 0
+                ? mirrorUsd / fullUsd
+                : mirrorLines.length / Math.max(1, cartItems.length);
+            if (ratio <= 0 || !Number.isFinite(ratio)) {
+              ratio = mirrorLines.length / Math.max(1, cartItems.length);
+            }
+            const roundedCred = Math.round(deductCredits * ratio);
+            const creditsShare =
+              deductCredits <= 0
+                ? 0
+                : roundedCred > 0
+                  ? roundedCred
+                  : ratio > 0 && deductCredits > 0
+                    ? Math.min(1, deductCredits)
+                    : 0;
+            return {
+              cash: Number((orderCashPaid * ratio).toFixed(2)),
+              credits: creditsShare,
+            };
+          })();
   for (const item of cartItems) {
     const product = productMap.get(item.id);
     if (!product) {
       return { success: false, error: "Product not found." };
     }
-    const isDropship =
-      (product.fulfillment_type ?? "").toLowerCase() === "dropshipping";
     const spec = parseProductSpecifications(product.specifications);
-    if (isDropship && spec?.shopify_variants.length) {
-      const vid = resolveVariantIdForCheckout(spec, item.shopifyVariantId ?? null);
-      if (!vid) {
-        return { success: false, error: "Missing Shopify variant" };
-      }
+    const vid = resolveVariantIdForCheckout(spec, item.shopifyVariantId ?? null);
+    if (spec?.shopify_variants?.length && vid) {
       const vrow = findVariantInSpecifications(spec, vid);
       const inv = vrow ? getVariantInventory(spec, vid) : null;
       if (inv != null) {
@@ -88,13 +150,17 @@ export async function fulfillPerksShopOrder(
         }
         continue;
       }
+      const stockLeft = product.stock_count ?? 0;
+      if (stockLeft < item.quantity) {
+        return { success: false, error: "Out of stock" };
+      }
+      continue;
     }
     const stockLeft = product.stock_count ?? 0;
     if (stockLeft < item.quantity) {
       return { success: false, error: "Out of stock" };
     }
   }
-
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("cash_balance, credit_balance")
@@ -132,25 +198,23 @@ export async function fulfillPerksShopOrder(
 
     for (const item of cartItems) {
       const product = productMap.get(item.id)!;
-      const isDropship =
-        (product.fulfillment_type ?? "").toLowerCase() === "dropshipping";
-      if (!isDropship) {
-        const newStock = Math.max(0, (product.stock_count ?? 0) - item.quantity);
-        const { error: updateStockError } = await supabase
-          .from("products")
-          .update({
-            stock_count: newStock,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", item.id);
+      if (cartLineHasResolvableShopifyVariant(product, item)) {
+        continue;
+      }
+      const newStock = Math.max(0, (product.stock_count ?? 0) - item.quantity);
+      const { error: updateStockError } = await supabase
+        .from("products")
+        .update({
+          stock_count: newStock,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", item.id);
 
-        if (updateStockError) {
-          console.error("[fulfillPerksShopOrder] stock update:", updateStockError);
-          return { success: false, error: "Inventory update failed" };
-        }
+      if (updateStockError) {
+        console.error("[fulfillPerksShopOrder] stock update:", updateStockError);
+        return { success: false, error: "Inventory update failed" };
       }
     }
-
     const orderLine: Record<string, unknown> = {
       user_id: userId,
       cash_paid: orderCashPaid,
@@ -188,29 +252,24 @@ export async function fulfillPerksShopOrder(
     }
 
     if (insertedOrder?.id) {
-      const allDropship = cartItems.every((c) => {
-        const p = productMap.get(c.id) as
-          | (typeof products)[number]
-          | undefined;
-        return (
-          p && (p.fulfillment_type ?? "").toLowerCase() === "dropshipping"
-        );
-      });
-      if (allDropship) {
-        const { syncDropshipWalletOrderToShopify } = await import(
+      const mirrorProducts = (products ?? []).filter((p) =>
+        mirrorLines.some((l) => l.id === p.id)
+      );
+      if (mirrorLines.length > 0) {
+        const { syncMirroredWalletOrderToShopify } = await import(
           "@/lib/shopify/wallet-dropship-order"
         );
-        await syncDropshipWalletOrderToShopify(supabase, {
+        await syncMirroredWalletOrderToShopify(supabase, {
           userId,
           orderId: insertedOrder.id,
-          cartItems,
-          orderCashPaid,
-          deductCredits,
-          products: (products ?? []) as ProductRow[],
+          cartItems: mirrorLines,
+          orderCashPaid: mirrorPaidShare.cash,
+          deductCredits: mirrorPaidShare.credits,
+          products: mirrorProducts as ProductRow[],
+          stripeCheckoutSession: stripeCheckoutSession ?? null,
         });
       }
     }
-
     revalidatePath("/");
     for (const item of cartItems) {
       revalidatePath(`/product/${item.id}`);

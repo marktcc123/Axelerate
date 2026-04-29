@@ -35,7 +35,7 @@ export async function verifyCartAndComputeUsdDue(
   const { data: products, error: fetchError } = await supabase
     .from("products")
     .select(
-      "id, discount_price, original_price, stock_count, fulfillment_type, specifications"
+      "id, discount_price, original_price, stock_count, specifications"
     )
     .in("id", productIds);
 
@@ -51,16 +51,11 @@ export async function verifyCartAndComputeUsdDue(
     if (!product) {
       return { ok: false, error: "Product not found." };
     }
-    const isDropship =
-      (product.fulfillment_type ?? "").toLowerCase() === "dropshipping";
-    const spec = parseProductSpecifications(product.specifications);
-    const fallbackUnit = Number(product.discount_price ?? product.original_price ?? 0);
 
-    if (isDropship && spec?.shopify_variants.length) {
-      const vid = resolveVariantIdForCheckout(spec, item.shopifyVariantId ?? null);
-      if (!vid) {
-        return { ok: false, error: "Missing Shopify variant for a product. Re-sync products." };
-      }
+    const spec = parseProductSpecifications(product.specifications);
+    const vid = resolveVariantIdForCheckout(spec, item.shopifyVariantId ?? null);
+
+    if (spec?.shopify_variants?.length && vid) {
       const vrow = findVariantInSpecifications(spec, vid);
       const inv = vrow ? getVariantInventory(spec, vid) : null;
       if (inv != null) {
@@ -79,6 +74,7 @@ export async function verifyCartAndComputeUsdDue(
           return { ok: false, error: "Out of stock" };
         }
       }
+      const fallbackUnit = Number(product.discount_price ?? product.original_price ?? 0);
       const unitPrice = getUnitPriceUsd(spec, vid, fallbackUnit);
       if (unitPrice <= 0) {
         return { ok: false, error: "Product has no cash price" };
@@ -95,7 +91,7 @@ export async function verifyCartAndComputeUsdDue(
       return { ok: false, error: "Out of stock" };
     }
     const unitPrice = product.discount_price ?? product.original_price ?? 0;
-    if (unitPrice <= 0) {
+    if (Number(unitPrice) <= 0) {
       return { ok: false, error: "Product has no cash price" };
     }
     totalAmount += Number(unitPrice) * item.quantity;

@@ -1,13 +1,18 @@
 import "server-only";
 
+import { mergeShopifyCommaTags } from "@/lib/shopify/product-specifications";
+
 /**
  * Shopify 集成（Storefront + Admin），仅允许在 Server Components / Server Actions / Route Handlers 中导入。
  *
  * 环境变量（.env.local）：
  * - SHOPIFY_STORE_DOMAIN：如 `your-store.myshopify.com`（不含 https）
  * - SHOPIFY_STOREFRONT_ACCESS_TOKEN：Headless Storefront API 令牌
- * - SHOPIFY_ADMIN_ACCESS_TOKEN：需 `write_orders`、`read_products`；建议 `read_customers` + `write_customers`（可创建/匹配 Customer）。若未批准 `write_customers`，镜像单会回退为仅 `email`、不挂 Customer ID
- * - SHOPIFY_ORDER_INVENTORY_BEHAVIOUR：可选。`decrement_obeying_policy`（默认，按可售量扣减）| `decrement_ignoring_policy` | `bypass`
+ * - SHOPIFY_ADMIN_ACCESS_TOKEN：需 `write_orders`、`read_products`；建议 `read_customers` + `write_customers`。镜像单迁移履约仓时需 `read_locations` + `write_merchant_managed_fulfillment_orders`。
+ * - SHOPIFY_ORDER_INVENTORY_BEHAVIOUR：可选。`decrement_ignoring_policy`（默认，镜像单常需此项：第三方/Trendsi 接管库存时在 Shopify 无「可卖」量也能建单扣账）| `decrement_obeying_policy`（强制按库存政策）| `bypass`
+ * - SHOPIFY_MIRROR_VENDOR_LOCATION_ID：可选，纯数字。REST 建单后将 Fulfillment order 移到此 Location（供应商仓）。
+ * - SHOPIFY_MIRROR_ASSIGN_VENDOR_LOCATION：设为 `true` / `1` 时若未配置 ID，则在 locations 列表中查找名称默认为 `Vendor` 的位置。
+ * - SHOPIFY_MIRROR_VENDOR_LOCATION_NAME：按名称查找（与上一项或本项合用）；单独设置该项也会启用名称查找，默认比对 `Vendor`。
  * - SHOPIFY_API_VERSION：可选，默认 `2024-10`（请勿把应用 ID 或随机 hex 当作 API 版本）
  *
  * Storefront GraphQL 参考：https://shopify.dev/docs/api/storefront
@@ -46,12 +51,254 @@ function getAdminToken(): string {
   return t;
 }
 
+/** Webhook 等场景按需拉 Admin REST：未配置令牌时不抛错。 */
+function getAdminTokenIfConfigured(): string | null {
+  const t = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN?.trim();
+  return t || null;
+}
+
+/**
+ * 按商品数字 ID 拉取 Admin REST **完整** Product JSON（含 `images[]`、`body_html`）。
+ * 用于补足 `products/update` Webhook 中第三方同步（如 Trendsi）带来的**不完整**载荷。
+ *
+ * @returns `product` 对象；未配置 Admin 令牌、HTTP 非 200 或解析失败时返回 `null`。
+ */
+export async function fetchAdminRestProductById(
+  productIdNumeric: string
+): Promise<Record<string, unknown> | null> {
+  const token = getAdminTokenIfConfigured();
+  if (!token) return null;
+  try {
+    const res = await fetch(
+      adminRestEndpoint(`/products/${encodeURIComponent(productIdNumeric)}.json`),
+      {
+        headers: {
+          "X-Shopify-Access-Token": token,
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+      }
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("[shopify] Admin GET product failed", {
+        status: res.status,
+        snippet: text.slice(0, 400),
+      });
+      return null;
+    }
+    const json = (await res.json()) as { product?: unknown };
+    const p = json?.product;
+    if (p && typeof p === "object" && !Array.isArray(p)) {
+      return p as Record<string, unknown>;
+    }
+    return null;
+  } catch (e) {
+    console.error("[shopify] Admin GET product threw", e);
+    return null;
+  }
+}
+
 function storefrontEndpoint(): string {
   return `https://${getStoreDomain()}/api/${getApiVersion()}/graphql.json`;
 }
 
 function adminRestEndpoint(path: string): string {
   return `https://${getStoreDomain()}/admin/api/${getApiVersion()}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function adminGraphqlEndpoint(): string {
+  return `https://${getStoreDomain()}/admin/api/${getApiVersion()}/graphql.json`;
+}
+
+async function shopifyAdminGraphql<T>(
+  query: string,
+  variables?: Record<string, unknown>
+): Promise<T> {
+  const res = await fetch(adminGraphqlEndpoint(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": getAdminToken(),
+    },
+    body: JSON.stringify({ query, variables }),
+    cache: "no-store",
+  });
+  const text = await res.text();
+  let body: { data?: T; errors?: { message: string }[] };
+  try {
+    body = JSON.parse(text) as { data?: T; errors?: { message: string }[] };
+  } catch {
+    throw new Error(`Admin GraphQL non-JSON (${res.status}): ${text.slice(0, 400)}`);
+  }
+  if (!res.ok) {
+    throw new Error(`Admin GraphQL HTTP ${res.status}: ${text.slice(0, 600)}`);
+  }
+  if (body.errors?.length) {
+    throw new Error(`Admin GraphQL: ${body.errors.map((e) => e.message).join("; ")}`);
+  }
+  if (body.data === undefined) {
+    throw new Error(`Admin GraphQL: empty data (${text.slice(0, 300)})`);
+  }
+  return body.data;
+}
+
+/** 解析要把镜像单履约迁移到的 Vendor Location（GID）。未启用或未找到时返回 null。 */
+let cachedMirrorVendorLocationGid: string | undefined | "_none_";
+
+async function resolveMirrorVendorFulfillmentLocationGid(): Promise<string | null> {
+  const idRaw = process.env.SHOPIFY_MIRROR_VENDOR_LOCATION_ID?.trim();
+  if (idRaw && /^\d+$/.test(idRaw)) {
+    return `gid://shopify/Location/${idRaw}`;
+  }
+
+  const nameEnv = process.env.SHOPIFY_MIRROR_VENDOR_LOCATION_NAME?.trim();
+  const assign =
+    process.env.SHOPIFY_MIRROR_ASSIGN_VENDOR_LOCATION?.trim().toLowerCase() === "true" ||
+    process.env.SHOPIFY_MIRROR_ASSIGN_VENDOR_LOCATION?.trim() === "1";
+  if (!nameEnv && !assign) return null;
+
+  const nameTarget = nameEnv || "Vendor";
+  if (cachedMirrorVendorLocationGid && cachedMirrorVendorLocationGid !== "_none_") {
+    return cachedMirrorVendorLocationGid;
+  }
+  if (cachedMirrorVendorLocationGid === "_none_") return null;
+
+  const res = await fetch(adminRestEndpoint("/locations.json"), {
+    headers: {
+      "X-Shopify-Access-Token": getAdminToken(),
+      "Content-Type": "application/json",
+    },
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    console.warn("[shopify] GET locations.json failed", res.status, text.slice(0, 300));
+    cachedMirrorVendorLocationGid = "_none_";
+    return null;
+  }
+  let parsed: { locations?: { id?: number; name?: string }[] };
+  try {
+    parsed = JSON.parse(text) as { locations?: { id?: number; name?: string }[] };
+  } catch {
+    cachedMirrorVendorLocationGid = "_none_";
+    return null;
+  }
+  const list = Array.isArray(parsed.locations) ? parsed.locations : [];
+  const want = nameTarget.toLowerCase();
+  const found = list.find(
+    (l) => String(l?.name ?? "").trim().toLowerCase() === want
+  );
+  if (found?.id != null && Number.isFinite(Number(found.id))) {
+    const gid = `gid://shopify/Location/${found.id}`;
+    cachedMirrorVendorLocationGid = gid;
+    return gid;
+  }
+  console.warn(
+    `[shopify] No Location named "${nameTarget}" (set SHOPIFY_MIRROR_VENDOR_LOCATION_ID or fix name).`
+  );
+  cachedMirrorVendorLocationGid = "_none_";
+  return null;
+}
+
+const FULFILLMENT_ORDERS_ON_ORDER_QUERY = /* GraphQL */ `
+  query MirrorOrderFulfillmentOrders($orderId: ID!) {
+    order(id: $orderId) {
+      id
+      fulfillmentOrders(first: 25) {
+        nodes {
+          id
+          status
+          assignedLocation {
+            location {
+              id
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const FULFILLMENT_ORDER_MOVE_MUTATION = /* GraphQL */ `
+  mutation MirrorMoveFulfillmentOrder($id: ID!, $newLocationId: ID!) {
+    fulfillmentOrderMove(id: $id, newLocationId: $newLocationId) {
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+/**
+ * REST 建单后 Shopify 自动分配履约仓；将未发货的 Fulfillment order 迁到 Vendor Location。
+ * 若目标仓无该 SKU 库存，Shopify 会返回 userErrors，仅记日志不抛错。
+ */
+async function moveMirrorOrderFulfillmentToVendorIfConfigured(
+  orderNumericId: string
+): Promise<void> {
+  const targetGid = await resolveMirrorVendorFulfillmentLocationGid();
+  if (!targetGid) return;
+
+  const orderGid = `gid://shopify/Order/${orderNumericId}`;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 300 + attempt * 150));
+    }
+
+    type Q = {
+      order: {
+        fulfillmentOrders: { nodes: Array<{ id: string; status: string; assignedLocation: { location: { id: string } | null } | null }> };
+      } | null;
+    };
+
+    let data: Q;
+    try {
+      data = await shopifyAdminGraphql<Q>(FULFILLMENT_ORDERS_ON_ORDER_QUERY, {
+        orderId: orderGid,
+      });
+    } catch (e) {
+      console.warn("[shopify] fulfillmentOrders query failed", e);
+      return;
+    }
+
+    const fos = data.order?.fulfillmentOrders?.nodes ?? [];
+    if (fos.length === 0) continue;
+
+    for (const fo of fos) {
+      if (!fo?.id) continue;
+      const st = String(fo.status ?? "").toUpperCase();
+      if (st === "CLOSED" || st === "CANCELLED") continue;
+      const cur = fo.assignedLocation?.location?.id ?? null;
+      if (cur === targetGid) continue;
+
+      type M = {
+        fulfillmentOrderMove: { userErrors: { field?: string[]; message: string }[] };
+      };
+
+      try {
+        const moved = await shopifyAdminGraphql<M>(FULFILLMENT_ORDER_MOVE_MUTATION, {
+          id: fo.id,
+          newLocationId: targetGid,
+        });
+        const errs = moved.fulfillmentOrderMove?.userErrors ?? [];
+        if (errs.length > 0) {
+          console.warn("[shopify] fulfillmentOrderMove userErrors:", errs);
+        }
+      } catch (e) {
+        console.warn("[shopify] fulfillmentOrderMove failed", e);
+      }
+    }
+
+    return;
+  }
+
+  console.warn(
+    "[shopify] fulfillmentOrders empty after retries; skipping vendor location move:",
+    orderNumericId
+  );
 }
 
 /** 从 `gid://shopify/ProductVariant/123` 或纯数字得到 REST 用的数字 variant_id */
@@ -86,9 +333,10 @@ const PRODUCTS_QUERY = /* GraphQL */ `
             url
             altText
           }
-          images(first: 1) {
+          images(first: 10) {
             nodes {
               url
+              altText
             }
           }
           variants(first: 50) {
@@ -130,8 +378,10 @@ export type ShopifyProduct = {
   title: string;
   description: string;
   handle: string;
-  /** 优先 featuredImage，否则 images[0] */
+  /** 优先 featuredImage，否则 images[0]，用于封面展示 */
   imageUrl: string | null;
+  /** 画廊 URL 列表（与 `images(first: 10)` 一致，顺序与 Shopify 画廊一致）；封面仍为 `imageUrl` */
+  imageUrls: string[];
   imageAlt: string | null;
   variants: ShopifyProductVariant[];
 };
@@ -147,7 +397,7 @@ type StorefrontProductsResponse = {
           description: string;
           handle: string;
           featuredImage: { url: string; altText: string | null } | null;
-          images: { nodes: { url: string }[] };
+          images: { nodes: { url: string; altText: string | null }[] };
           variants: {
             nodes: {
               id: string;
@@ -204,7 +454,7 @@ async function storefrontGraphql<TData>(
 }
 
 /**
- * 拉取商品：标题、描述、首图、变体价与可售/库存（Storefront 可见字段）。
+ * 拉取商品：标题、描述、封面图、图廊（最多 10 张）、变体价与可售/库存（Storefront 可见字段）。
  */
 export async function getProducts(options?: {
   first?: number;
@@ -221,15 +471,31 @@ export async function getProducts(options?: {
 
   const products: ShopifyProduct[] = (data?.products?.edges ?? []).map(
     ({ node }) => {
+      const nodes = node.images?.nodes ?? [];
+      const rawUrls = nodes
+        .map((n) => (n.url ? String(n.url).trim() : ""))
+        .filter(Boolean);
+      const seenUrl = new Set<string>();
+      const imageUrls = rawUrls.filter((u) => {
+        if (seenUrl.has(u)) return false;
+        seenUrl.add(u);
+        return true;
+      });
       const imageUrl =
-        node.featuredImage?.url ?? node.images?.nodes[0]?.url ?? null;
+        node.featuredImage?.url ??
+        nodes[0]?.url ??
+        imageUrls[0] ??
+        null;
+      const imageAlt =
+        node.featuredImage?.altText ?? nodes[0]?.altText ?? null;
       return {
         id: node.id,
         title: node.title,
         description: node.description,
         handle: node.handle,
         imageUrl,
-        imageAlt: node.featuredImage?.altText ?? null,
+        imageUrls,
+        imageAlt,
         variants: (node.variants?.nodes ?? []).map((v) => ({
           id: v.id,
           title: v.title,
@@ -409,6 +675,10 @@ export type CreatePaidOrderInShopifyInput = {
   paymentSource?: "stripe" | "wallet";
   /** 写进 `transactions[].gateway`；不填则按 paymentSource 用 `Stripe` 或 `Axelerate` */
   transactionGateway?: string;
+  /**
+   * 追加到 Shopify 订单 `tags`（逗号分隔），通常来自后台商品 `tags`；与内置 `nextjs,…,axelerate-mirror` 合并去重。
+   */
+  additionalMirrorTags?: string;
 };
 
 type AdminOrderRestResponse = {
@@ -438,7 +708,8 @@ function getOrderInventoryBehaviour(): string {
   ) {
     return v;
   }
-  return "decrement_obeying_policy";
+  /** 外部已收款镜像单：避免 Shopify 侧「无 Available」时整单 422 */
+  return "decrement_ignoring_policy";
 }
 
 /**
@@ -606,13 +877,18 @@ export async function createPaidOrderInShopify(
   }
 
   const tagWallet = isWallet ? "wallet" : "stripe-mirrored";
+  const mergedTagStr = mergeShopifyCommaTags([
+    `nextjs,${tagWallet},inventory-sync,axelerate-mirror`,
+    input.additionalMirrorTags?.trim() ?? "",
+  ]);
+
   const order: Record<string, unknown> = {
     email,
     line_items,
     send_receipt: input.sendReceipt ?? false,
     financial_status: "paid",
     note: noteParts.join(" | "),
-    tags: `nextjs,${tagWallet},inventory-sync,axelerate-mirror`,
+    tags: mergedTagStr || `nextjs,${tagWallet},inventory-sync,axelerate-mirror`,
     inventory_behaviour: getOrderInventoryBehaviour(),
     note_attributes: noteAttrs,
   };
@@ -701,6 +977,12 @@ export async function createPaidOrderInShopify(
 
   if (!body.order) {
     throw new Error("Admin order create: empty order in response");
+  }
+
+  try {
+    await moveMirrorOrderFulfillmentToVendorIfConfigured(String(body.order.id));
+  } catch (e) {
+    console.warn("[shopify] mirror fulfillment vendor location move:", e);
   }
 
   return {

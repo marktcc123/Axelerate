@@ -2,8 +2,15 @@ import crypto from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import JSONBig from "json-bigint";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { buildProductSpecificationsFromRest } from "@/lib/shopify/product-specifications";
+import { attachShopifyProductTags, buildProductSpecificationsFromRest } from "@/lib/shopify/product-specifications";
+import {
+  pickAllRestProductImageSrcs,
+  pickFirstRestProductImage,
+} from "@/lib/shopify/rest-product-images";
+import { fetchAdminRestProductById } from "@/lib/shopify/api";
+import { enrichProductPayloadWithInventoryLevels } from "@/lib/shopify/inventory-levels-admin";
 
+/** 此 Webhook 写入的 `products` 行以 Shopify 载荷为准；App 侧商品数据应由此与 `sync-shopify-products` 同步，而非独立建主数据。 */
 const parseShopifyProductJson = JSONBig({ storeAsString: true }).parse;
 
 export const runtime = "nodejs";
@@ -29,6 +36,8 @@ export async function GET() {
         hasShopifyWebhookSecret: Boolean(process.env.SHOPIFY_WEBHOOK_SECRET?.trim()),
         hasSupabaseUrl: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()),
         hasServiceRole: Boolean(sr),
+        /** 建议配置：Webhook 收到摘要 Body 时会用 Admin REST 拉全量商品以写入 `images` / `long_description_html` */
+        hasShopifyAdminToken: Boolean(process.env.SHOPIFY_ADMIN_ACCESS_TOKEN?.trim()),
         /** 必须是 service_role 的 JWT（以 eyJ 开头），不要用 sb_publishable / anon */
         serviceRoleKeyLooksValid: serviceRoleKeyLooksLikeJwt(sr),
         hasFixedDropshipBrand: Boolean(process.env.SHOPIFY_DROPSHIP_BRAND_ID?.trim()),
@@ -48,10 +57,13 @@ type ShopifyProductPayload = {
   vendor?: string | null;
   /** 常用作商品类型/分类提示 */
   product_type?: string | null;
+  /** 部分 Webhook（含第三方精简摘要）会省略此字段或仅含占位；完整数据依赖 Admin REST 合并 */
+  featured_image?: string | null;
   image?: { src?: string } | null;
-  images?: { id?: number; src: string }[];
+  images?: { id?: number; src?: string }[];
   variants?: {
     id: string | number;
+    inventory_item_id?: string | number;
     price?: string;
     position?: number;
     inventory_quantity?: number;
@@ -61,6 +73,8 @@ type ShopifyProductPayload = {
     option3?: string | null;
   }[];
   options?: { name: string; position: number; values: string[] }[];
+  /** Admin REST `tags` 字符串，逗号分隔；写入 `specifications.shopify_product_tags` 供镜像单合并到订单 tags */
+  tags?: string | null;
 };
 
 function verifyShopifyHmac(
@@ -77,12 +91,6 @@ function verifyShopifyHmac(
   const b = Buffer.from(hmacHeader, "utf8");
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
-}
-
-function pickFirstImage(product: ShopifyProductPayload): string | null {
-  if (product.image?.src) return product.image.src;
-  const first = product.images?.[0]?.src;
-  return first ?? null;
 }
 
 type ShopifyVariant = NonNullable<ShopifyProductPayload["variants"]>[number];
@@ -199,17 +207,21 @@ function buildProductRow(
   const category =
     (product.product_type ?? "").trim().slice(0, 120) || "Beauty";
 
-  const specifications = buildProductSpecificationsFromRest(
-    product.variants ?? null,
-    product.options ?? null
+  const specifications = attachShopifyProductTags(
+    buildProductSpecificationsFromRest(product.variants ?? null, product.options ?? null),
+    product.tags != null ? String(product.tags) : undefined
   );
+
+  const galleryUrls = pickAllRestProductImageSrcs(product);
 
   return {
     shopify_product_id: shopifyProductId,
     brand_id: brandId,
     title: (product.title ?? "Untitled").slice(0, 2000),
     description: htmlToPlainText(product.body_html),
-    image_url: pickFirstImage(product),
+    long_description_html: product.body_html ? String(product.body_html) : null,
+    image_url: pickFirstRestProductImage(product),
+    images: galleryUrls.length > 0 ? galleryUrls : null,
     original_price: price,
     price_credits: 0,
     stock_count: stock,
@@ -305,6 +317,19 @@ export async function POST(request: Request) {
     return errJson("missing_product_id", 400);
   }
 
+  /** 第三方（如 Trendsi）触发的 Webhook Body 常为摘要：缺 `images`/`body_html`；用 Admin REST 拉全量后再写库。 */
+  let productForDb: ShopifyProductPayload = product;
+  const adminSnapshot = await fetchAdminRestProductById(shopifyProductId);
+  if (adminSnapshot) {
+    productForDb = {
+      ...product,
+      ...(adminSnapshot as unknown as ShopifyProductPayload),
+      id: product.id,
+    };
+  }
+
+  await enrichProductPayloadWithInventoryLevels(productForDb);
+
   let supabase: SupabaseClient;
   try {
     supabase = createAdminClient();
@@ -317,7 +342,7 @@ export async function POST(request: Request) {
 
   let brandId: string;
   try {
-    brandId = await resolveBrandIdForProduct(supabase, product, shop);
+    brandId = await resolveBrandIdForProduct(supabase, productForDb, shop);
   } catch (e) {
     console.error("[shopify webhook] resolve brand failed:", e, { shop, topic });
     const supa = e as { message?: string; code?: string };
@@ -328,7 +353,7 @@ export async function POST(request: Request) {
     return errJson("brand_resolution_failed", 500, { detail: detail || String(e) });
   }
 
-  const row = buildProductRow(brandId, product, shopifyProductId);
+  const row = buildProductRow(brandId, productForDb, shopifyProductId);
 
   let data: { id?: string } | null;
   try {

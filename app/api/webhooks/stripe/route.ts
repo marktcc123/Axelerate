@@ -5,17 +5,25 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getStripe } from "@/lib/stripe/server";
 import { fulfillPerksShopOrder } from "@/lib/perks-order-fulfill";
 import { fulfillWalletTopUpFromSession } from "@/lib/stripe/fulfill-wallet-topup";
+import { createPaidOrderInShopify } from "@/lib/shopify/api";
 import {
-  createPaidOrderInShopify,
-  type CreatePaidOrderInShopifyInput,
-} from "@/lib/shopify/api";
+  mapStripeAddressToShopify,
+  mapStripeBillingToShopify,
+  getCustomerNamePhoneForStripeShopify as getCustomerNamePhoneForShopify,
+} from "@/lib/stripe/checkout-session-shopify-maps";
 import { logShopifyOrderCreateFailure } from "@/lib/supabase/error-logs";
+import { ensureProfileRowForUser } from "@/lib/supabase/ensure-user-profile";
 import {
   parseCartMetadata,
   verifyCartAndComputeUsdDue,
 } from "@/lib/perks-checkout-pricing";
 import { parseDropshipLineMetadata } from "@/lib/shopify/dropship-from-product";
 import type { StripeMirroredLineItem } from "@/lib/shopify/api";
+import {
+  cartLineHasResolvableShopifyVariant,
+  mergeShopifyCommaTags,
+  parseProductSpecifications,
+} from "@/lib/shopify/product-specifications";
 
 export const runtime = "nodejs";
 
@@ -23,86 +31,6 @@ function getPaymentIntentId(session: Stripe.Checkout.Session): string | undefine
   const pi = session.payment_intent;
   if (pi == null) return undefined;
   return typeof pi === "string" ? pi : pi.id;
-}
-
-type SessionWithShipping = Stripe.Checkout.Session & {
-  shipping_details?: {
-    name?: string | null;
-    phone?: string | null;
-    address?: {
-      line1?: string | null;
-      city?: string | null;
-      state?: string | null;
-      country?: string | null;
-      postal_code?: string | null;
-    } | null;
-  } | null;
-};
-
-/**
- * 优先用 Checkout 的 shipping_details；无物理发货/仅账单地址时用 customer_details.address（Stripe 常见）。
- * Shopify 的 shipping_address 供 Spocket 等 dropship 用，尽量填全。
- */
-function mapStripeAddressToShopify(
-  session: Stripe.Checkout.Session
-): CreatePaidOrderInShopifyInput["shippingAddress"] | undefined {
-  const s = (session as SessionWithShipping).shipping_details;
-  const shipA = s?.address;
-  if (shipA?.line1) {
-    const name = s?.name?.trim() || "Customer";
-    const [first, ...rest] = name.split(/\s+/);
-    return {
-      first_name: first || "Customer",
-      last_name: rest.join(" ") || "-",
-      address1: shipA.line1 || "",
-      city: shipA.city || "",
-      province: shipA.state || "",
-      country: shipA.country || "",
-      zip: shipA.postal_code || "",
-      phone: s?.phone || undefined,
-    };
-  }
-  const cd = session.customer_details;
-  const ca = cd?.address;
-  if (cd && ca?.line1) {
-    const name = cd.name?.trim() || "Customer";
-    const [first, ...rest] = name.split(/\s+/);
-    return {
-      first_name: first || "Customer",
-      last_name: rest.join(" ") || "-",
-      address1: ca.line1 || "",
-      city: ca.city || "",
-      province: ca.state || "",
-      country: ca.country || "",
-      zip: ca.postal_code || "",
-      phone: (cd as { phone?: string | null }).phone ?? s?.phone ?? undefined,
-    };
-  }
-  return undefined;
-}
-
-/**
- * 账单 / 常出现在 `customer_details`（与 shipping_details 可并存于物理发货单）。
- */
-function mapStripeBillingToShopify(
-  session: Stripe.Checkout.Session
-): CreatePaidOrderInShopifyInput["billingAddress"] | undefined {
-  const cd = session.customer_details;
-  if (!cd) return undefined;
-  const ca = cd.address;
-  if (!ca?.line1) return undefined;
-  const name = cd.name?.trim() || "Customer";
-  const [first, ...rest] = name.split(/\s+/);
-  return {
-    first_name: first || "Customer",
-    last_name: rest.join(" ") || "-",
-    address1: ca.line1 || "",
-    city: ca.city || "",
-    province: ca.state || "",
-    country: ca.country || "",
-    zip: ca.postal_code || "",
-    phone: (cd as { phone?: string | null }).phone ?? undefined,
-  };
 }
 
 type StripeCentsBreakdown = {
@@ -132,43 +60,6 @@ function getStripeCentsBreakdown(
       ? sub
       : Math.max(0, totalCents - shippingCents - taxCents);
   return { productCents, shippingCents, taxCents, totalCents };
-}
-
-/**
- * 取用于 Shopify Customer/行的姓名与电话；优先收货运收货人，其次 Stripe 客户资料。
- */
-function getCustomerNamePhoneForShopify(
-  session: Stripe.Checkout.Session,
-  shipping: CreatePaidOrderInShopifyInput["shippingAddress"]
-): { first_name: string; last_name: string; phone: string | undefined } {
-  const s = (session as SessionWithShipping).shipping_details;
-  if (s?.name?.trim() || s?.phone) {
-    const name = s.name?.trim() || "Customer";
-    const [first, ...rest] = name.split(/\s+/);
-    return {
-      first_name: first || "Customer",
-      last_name: rest.join(" ") || "-",
-      phone: s.phone ?? undefined,
-    };
-  }
-  const cd = session.customer_details;
-  if (cd && cd.name?.trim()) {
-    const name = cd.name.trim();
-    const [first, ...rest] = name.split(/\s+/);
-    return {
-      first_name: first || "Customer",
-      last_name: rest.join(" ") || "-",
-      phone: (cd as { phone?: string | null }).phone ?? undefined,
-    };
-  }
-  if (shipping) {
-    return {
-      first_name: shipping.first_name,
-      last_name: shipping.last_name,
-      phone: shipping.phone,
-    };
-  }
-  return { first_name: "Customer", last_name: "-", phone: undefined };
 }
 
 /**
@@ -317,6 +208,16 @@ async function handleDropshippingSession(
     return new Response("ok", { status: 200 });
   }
 
+  const ensuredProfile = await ensureProfileRowForUser(supabase, userId);
+  if (!ensuredProfile.ok) {
+    console.error(
+      "[stripe webhook] dropshipping: no profiles row",
+      ensuredProfile.error,
+      sessionId
+    );
+    return new Response("User profile missing", { status: 400 });
+  }
+
   if (session.payment_status !== "paid") {
     return new Response("ok", { status: 200 });
   }
@@ -329,11 +230,22 @@ async function handleDropshippingSession(
   const amountNum = paidCents / 100;
   const currencyCode = (session.currency ?? "usd").toUpperCase();
   const creditsUsed = Math.max(0, Math.floor(Number(session.metadata?.creditsToUse) || 0));
-  const itemsRow = variantLines.map((l) => ({
-    id: l.shopifyVariantId,
-    quantity: l.quantity,
-    orderType: "dropshipping",
-  }));
+
+  /** 与购物车 metadata 对齐：写入 App 商品 id（uuid），便于订单展示；长度与 dropshipLines 一致时逐项合并变体 id */
+  const cartForItems = parseCartMetadata(session.metadata?.cart ?? "");
+  const itemsRow =
+    cartForItems.length > 0 && cartForItems.length === variantLines.length
+      ? cartForItems.map((c, i) => ({
+          id: c.id,
+          quantity: c.quantity,
+          shopifyVariantId: variantLines[i]!.shopifyVariantId,
+          orderType: "dropshipping",
+        }))
+      : variantLines.map((l) => ({
+          id: l.shopifyVariantId,
+          quantity: l.quantity,
+          orderType: "dropshipping",
+        }));
 
   let email =
     session.customer_details?.email?.trim() ??
@@ -352,7 +264,6 @@ async function handleDropshippingSession(
       user_id: userId,
       cash_paid: amountNum,
       credits_used: creditsUsed,
-      total_amount: amountNum,
       status: "shopify_sync_failed",
       items: itemsRow,
       stripe_checkout_session_id: sessionId,
@@ -361,7 +272,13 @@ async function handleDropshippingSession(
       if (insErr.code === "23505") {
         return new Response("ok", { status: 200 });
       }
-      console.error("[stripe webhook] dropshipping: insert (no email)", insErr, sessionId);
+      console.error(
+        "[stripe webhook] dropshipping: insert (no email)",
+        insErr.code,
+        insErr.message,
+        insErr.details,
+        sessionId
+      );
       return new Response("Order insert failed", { status: 500 });
     }
     console.error("[stripe webhook] dropshipping: no email for order", sessionId);
@@ -374,7 +291,6 @@ async function handleDropshippingSession(
       user_id: userId,
       cash_paid: amountNum,
       credits_used: creditsUsed,
-      total_amount: amountNum,
       status: "processing",
       items: itemsRow,
       stripe_checkout_session_id: sessionId,
@@ -386,7 +302,13 @@ async function handleDropshippingSession(
     if (insertError.code === "23505") {
       return new Response("ok", { status: 200 });
     }
-    console.error("[stripe webhook] dropshipping: insert", insertError, sessionId);
+    console.error(
+      "[stripe webhook] dropshipping: insert",
+      insertError.code,
+      insertError.message,
+      insertError.details,
+      sessionId
+    );
     return new Response("Order insert failed", { status: 500 });
   }
 
@@ -427,6 +349,21 @@ async function handleDropshippingSession(
   const namePhone = getCustomerNamePhoneForShopify(session, shippingAddress);
   const phone = namePhone.phone ?? shippingAddress?.phone ?? billingAddress?.phone;
 
+  const cartParsedForTags = parseCartMetadata(session.metadata?.cart ?? "");
+  const idsForTags = [...new Set(cartParsedForTags.map((c) => c.id))];
+  let additionalMirrorTagsFromProducts = "";
+  if (idsForTags.length > 0) {
+    const { data: tagRows } = await supabase
+      .from("products")
+      .select("specifications")
+      .in("id", idsForTags);
+    additionalMirrorTagsFromProducts = mergeShopifyCommaTags(
+      (tagRows ?? []).map((r) =>
+        parseProductSpecifications(r.specifications)?.shopify_product_tags
+      )
+    );
+  }
+
   try {
     const shopifyOrder = await createPaidOrderInShopify({
       stripeReference: {
@@ -441,6 +378,7 @@ async function handleDropshippingSession(
       billingAddress: billingAddress ?? undefined,
       shippingLines,
       taxAmount,
+      additionalMirrorTags: additionalMirrorTagsFromProducts || undefined,
       customer: {
         first_name: namePhone.first_name,
         last_name: namePhone.last_name,
@@ -494,9 +432,15 @@ async function handleDropshippingSession(
     for (const line of cartForStock) {
       const { data: p } = await supabase
         .from("products")
-        .select("stock_count")
+        .select("stock_count, specifications")
         .eq("id", line.id)
         .single();
+      if (
+        p &&
+        cartLineHasResolvableShopifyVariant({ specifications: p.specifications }, line)
+      ) {
+        continue;
+      }
       if (p) {
         const newStock = Math.max(0, (p.stock_count ?? 0) - line.quantity);
         const { error: stErr } = await supabase
@@ -552,7 +496,12 @@ export async function POST(request: Request) {
     return new Response("Invalid signature", { status: 400 });
   }
 
-  if (event.type !== "checkout.session.completed") {
+  const fulfillEventTypes = new Set([
+    "checkout.session.completed",
+    /** 部分异步支付方式在 `completed` 时尚未 `paid`，成功付款后仅发此事件 */
+    "checkout.session.async_payment_succeeded",
+  ]);
+  if (!fulfillEventTypes.has(event.type)) {
     return new Response("ok", { status: 200 });
   }
 
@@ -560,12 +509,27 @@ export async function POST(request: Request) {
   const sessionId = session.id;
   const supabase = createAdminClient();
 
-  console.info("[stripe webhook] checkout.session.completed", {
+  console.info("[stripe webhook] session event", {
+    eventType: event.type,
     sessionId,
+    payment_status: session.payment_status,
+    amount_total: session.amount_total,
     purpose: session.metadata?.purpose ?? null,
     orderType: session.metadata?.orderType ?? null,
     hasDropshipLines: Boolean(session.metadata?.dropshipLines?.trim()),
   });
+
+  /**
+   * `checkout.session.completed` 在异步支付（及部分钱包）路径上可能早于扣款完成；
+   * 未付清前不得写订单 —— 交给 `checkout.session.async_payment_succeeded`。
+   */
+  if (session.payment_status !== "paid") {
+    console.info(
+      "[stripe webhook] skip fulfillment — not paid yet (wait for async or retry)",
+      { sessionId, eventType: event.type, payment_status: session.payment_status }
+    );
+    return new Response("ok", { status: 200 });
+  }
 
   if (session.metadata?.purpose === "wallet_topup") {
     const r = await fulfillWalletTopUpFromSession(supabase, session);
@@ -590,6 +554,16 @@ export async function POST(request: Request) {
     return new Response("Bad metadata", { status: 400 });
   }
 
+  const shopProfileOk = await ensureProfileRowForUser(supabase, userId.trim());
+  if (!shopProfileOk.ok) {
+    console.error(
+      "[stripe webhook] shop: no profiles row",
+      shopProfileOk.error,
+      sessionId
+    );
+    return new Response("User profile missing", { status: 400 });
+  }
+
   const cartItems = parseCartMetadata(cartRaw);
   if (cartItems.length === 0) {
     return new Response("Empty cart", { status: 400 });
@@ -609,25 +583,62 @@ export async function POST(request: Request) {
   }
 
   const paidCents = session.amount_total ?? 0;
-  if (expectedCents && Number(expectedCents) !== paidCents) {
+  const metaCentsParsed = Number(String(expectedCents ?? "").trim());
+  /** 创建 Session 时写入的预期美分；Stripe `amount_total` 为收款侧真值 */
+  const metaUsdCentsLooksValid =
+    expectedCents != null &&
+    expectedCents !== "" &&
+    Number.isFinite(metaCentsParsed) &&
+    Math.floor(metaCentsParsed) === metaCentsParsed;
+
+  const recomputedPaidCents = Math.round(pricing.amountToPayUsd * 100);
+  const CENT_SLACK = 10;
+
+  function centsClose(a: number, b: number): boolean {
+    return Math.abs(a - b) <= CENT_SLACK;
+  }
+
+  const stripeAmountMatchesStoredMeta =
+    metaUsdCentsLooksValid && centsClose(metaCentsParsed, paidCents);
+
+  if (!centsClose(recomputedPaidCents, paidCents) && !stripeAmountMatchesStoredMeta) {
     console.error(
-      "[stripe webhook] amount mismatch",
-      expectedCents,
-      paidCents,
-      sessionId
+      "[stripe webhook] amount verification failed (catalog vs Stripe, and meta vs Stripe)",
+      {
+        sessionId,
+        paidCents,
+        recomputedPaidCents,
+        metaCents: metaUsdCentsLooksValid ? metaCentsParsed : null,
+        expectedCentsRaw: expectedCents,
+      }
     );
     return new Response("Amount mismatch", { status: 400 });
   }
 
-  const expectedPaidCents = Math.round(pricing.amountToPayUsd * 100);
-  if (paidCents !== expectedPaidCents) {
-    console.error(
-      "[stripe webhook] amount vs recomputed",
-      paidCents,
-      expectedPaidCents,
-      sessionId
+  if (
+    recomputedPaidCents !== paidCents &&
+    !centsClose(recomputedPaidCents, paidCents) &&
+    stripeAmountMatchesStoredMeta
+  ) {
+    console.warn(
+      "[stripe webhook] recomputed cents differ from Stripe; trusting Stripe metadata+amount_total",
+      { paidCents, recomputedPaidCents, sessionId }
     );
-    return new Response("Amount mismatch", { status: 400 });
+  }
+
+  /** 与 `handleDropshippingSession` 对齐：拉完整 Session，供 `syncMirroredWalletOrderToShopify` 使用。 */
+  let sessionForFulfill: Stripe.Checkout.Session = session;
+  if (stripe) {
+    try {
+      sessionForFulfill = await stripe.checkout.sessions.retrieve(session.id, {
+        expand: ["shipping_cost.shipping_rate"],
+      });
+    } catch (e) {
+      console.warn(
+        "[stripe webhook] sessions.retrieve(expand) failed, using webhook payload for fulfill",
+        e
+      );
+    }
   }
 
   const result = await fulfillPerksShopOrder(supabase, {
@@ -637,6 +648,7 @@ export async function POST(request: Request) {
     deductCredits: pricing.actualCreditsUsed,
     orderCashPaid: pricing.amountToPayUsd,
     stripeCheckoutSessionId: sessionId,
+    stripeCheckoutSession: sessionForFulfill,
   });
 
   if (!result.success) {

@@ -65,7 +65,51 @@ export async function createStripeCheckoutSession(
     return { error: "Cart is too large for card checkout — remove some items." };
   }
 
-  const session = await stripe.checkout.sessions.create({
+  const productIdsForDropshipMeta = cartItems.map((c) => c.id);
+  const { data: prodRowsForDs } = await supabase
+    .from("products")
+    .select("id, fulfillment_type, specifications")
+    .in("id", productIdsForDropshipMeta);
+  const pmapDs = new Map((prodRowsForDs ?? []).map((p) => [p.id, p]));
+  const dropshipVariantLines: { shopifyVariantId: string; quantity: number }[] =
+    [];
+  for (const c of cartItems) {
+    const row = pmapDs.get(c.id);
+    if (!row || (row.fulfillment_type ?? "").toLowerCase() !== "dropshipping") {
+      continue;
+    }
+    const spec = parseProductSpecifications(row.specifications);
+    const vid = resolveVariantIdForCheckout(spec, c.shopifyVariantId ?? null);
+    if (!vid) {
+      return {
+        error:
+          "购物车含代发货商品但缺少 Shopify 变体 id。请同步商品（npm run sync:shopify-products）或仅使用纯代发车结账。",
+      };
+    }
+    dropshipVariantLines.push({ shopifyVariantId: vid, quantity: c.quantity });
+  }
+
+  let dropshipLinesEncoded: string | null = null;
+  if (dropshipVariantLines.length > 0) {
+    try {
+      const enc = encodeDropshipLineMetadata(dropshipVariantLines);
+      if (enc.length > 450) {
+        return {
+          error:
+            "购物车中代发货项过多（metadata 超长）。请分拆下单或仅用代发货结账。",
+        };
+      }
+      dropshipLinesEncoded = enc;
+    } catch (e) {
+      return {
+        error: e instanceof Error ? e.message : "Invalid dropship line metadata.",
+      };
+    }
+  }
+
+  const needsAddressForMixedDropship = dropshipVariantLines.length > 0;
+
+  const sessionParams: Stripe.Checkout.SessionCreateParams = {
     mode: "payment",
     payment_method_types: ["card"],
     line_items: [
@@ -88,9 +132,20 @@ export async function createStripeCheckoutSession(
       cart: cartMeta,
       creditsToUse: String(pricing.actualCreditsUsed),
       usdCents: String(cents),
+      ...(dropshipLinesEncoded ? { dropshipLines: dropshipLinesEncoded } : {}),
     },
     client_reference_id: user.id,
-  });
+    ...(needsAddressForMixedDropship
+      ? {
+          shipping_address_collection: {
+            allowed_countries: getStripeCheckoutShippingCountries(),
+          },
+          phone_number_collection: { enabled: true },
+        }
+      : {}),
+  };
+
+  const session = await stripe.checkout.sessions.create(sessionParams);
 
   if (!session.url) {
     return { error: "Could not start Stripe Checkout." };

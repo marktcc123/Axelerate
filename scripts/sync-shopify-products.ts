@@ -1,6 +1,9 @@
 /**
  * 一次性从 Shopify Admin REST 拉取全店商品并写入 Supabase `products`（存量同步）。
  *
+ * 数据原则：**商品目录、变体、价格在业务上以 Shopify Admin 为准**；本表是供 App 展示的缓存。
+ * 上架/改价/改库存请在 Shopify 侧操作，再靠本脚本或 `products/*` Webhook 回写 Supabase；勿把 Supabase 当主库手改再反向推 Shopify。
+ *
  * 依赖 .env.local（缺任一项都会报错，请逐项核对）：
  *   SHOPIFY_STORE_DOMAIN
  *   SHOPIFY_ADMIN_ACCESS_TOKEN  ← 与 Webhook 的 SHOPIFY_WEBHOOK_SECRET、Storefront 的 SHOPIFY_STOREFRONT_ACCESS_TOKEN 不是同一个；须为
@@ -10,6 +13,8 @@
  * 可选：
  *   SHOPIFY_API_VERSION（默认 2024-10）
  *   SHOPIFY_DROPSHIP_BRAND_ID — 若设置则所有商品挂到该品牌，否则按 `vendor` 建/查品牌（与 Webhook 一致）
+ *   SHOPIFY_ENRICH_INVENTORY_FROM_LEVELS — 默认启用：用 Admin `inventory_levels` 汇总真实可售量写回变体（需 read_inventory）
+ *   SHOPIFY_INVENTORY_LOCATION_IDS — 可选，逗号分隔：只统计这些 Location 的 available
  *
  * 用法：
  *   npx tsx scripts/sync-shopify-products.ts
@@ -23,7 +28,15 @@ import dotenv from "dotenv";
 import JSONBig from "json-bigint";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "../lib/supabase/admin";
-import { buildProductSpecificationsFromRest } from "../lib/shopify/product-specifications";
+import { attachShopifyProductTags, buildProductSpecificationsFromRest } from "../lib/shopify/product-specifications";
+import {
+  pickAllRestProductImageSrcs,
+  pickFirstRestProductImage,
+} from "../lib/shopify/rest-product-images";
+import {
+  buildAvailabilityMapForRestProducts,
+  overlayVariantsInventoryQuantityFromAvailabilityMap,
+} from "../lib/shopify/inventory-levels-admin";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, "..", ".env.local") });
@@ -91,6 +104,7 @@ function adminRestUrl(pathWithQuery: string): string {
 
 type RestVariant = {
   id?: string | number;
+  inventory_item_id?: string | number;
   price?: string;
   position?: number;
   inventory_quantity?: number;
@@ -111,6 +125,8 @@ type RestProduct = {
   status?: string;
   vendor?: string | null;
   product_type?: string | null;
+  /** Admin REST 商品 tags，写入 specifications 供镜像订单 */
+  tags?: string | null;
   image?: { src?: string } | null;
   images?: RestImage[] | null;
   variants?: RestVariant[] | null;
@@ -135,21 +151,6 @@ function parsePriceNumber(priceStr: string | undefined): number {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-function pickFirstImage(product: RestProduct): string | null {
-  if (product.image?.src) return product.image.src;
-  const first = product.images?.[0]?.src;
-  return first ?? null;
-}
-
-function pickAllImageSrcs(product: RestProduct): string[] {
-  const fromImages = (product.images ?? [])
-    .map((im) => (im?.src ? String(im.src).trim() : ""))
-    .filter(Boolean);
-  if (fromImages.length > 0) return fromImages;
-  const one = pickFirstImage(product);
-  return one ? [one] : [];
-}
-
 function defaultVariant(product: RestProduct): RestVariant {
   const variants = product.variants;
   if (!variants?.length) {
@@ -161,7 +162,10 @@ function defaultVariant(product: RestProduct): RestVariant {
 }
 
 function buildVariantPricesSpec(product: RestProduct): Record<string, unknown> | null {
-  return buildProductSpecificationsFromRest(product.variants, product.options ?? null);
+  return attachShopifyProductTags(
+    buildProductSpecificationsFromRest(product.variants, product.options ?? null),
+    product.tags != null ? String(product.tags) : undefined
+  );
 }
 
 // --- 品牌：与 `app/api/webhooks/shopify/route.ts` 同逻辑（精简列 insert）---
@@ -272,7 +276,7 @@ function productToRow(
   const category =
     (product.product_type ?? "").trim().slice(0, 120) || "Beauty";
 
-  const imageUrls = pickAllImageSrcs(product);
+  const imageUrls = pickAllRestProductImageSrcs(product);
   const varSpec = buildVariantPricesSpec(product);
 
   return {
@@ -281,7 +285,7 @@ function productToRow(
     title: (product.title ?? "Untitled").slice(0, 2000),
     description: htmlToPlainText(product.body_html),
     long_description_html: product.body_html ? String(product.body_html) : null,
-    image_url: pickFirstImage(product),
+    image_url: pickFirstRestProductImage(product),
     images: imageUrls.length > 0 ? imageUrls : null,
     original_price: price,
     price_credits: 0,
@@ -429,6 +433,16 @@ async function main() {
 
   const products = await fetchAllProducts(token);
   console.log(`[sync-shopify-products] fetched ${products.length} product(s) from Shopify`);
+
+  const availabilityMap = await buildAvailabilityMapForRestProducts(products);
+  if (availabilityMap.size > 0) {
+    console.log(
+      `[sync-shopify-products] inventory_levels: ${availabilityMap.size} inventory_item_id(s)`
+    );
+    for (const p of products) {
+      overlayVariantsInventoryQuantityFromAvailabilityMap(p.variants, availabilityMap);
+    }
+  }
 
   const rows: ProductUpsertRow[] = [];
 

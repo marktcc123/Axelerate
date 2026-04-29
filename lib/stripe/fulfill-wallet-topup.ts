@@ -17,7 +17,12 @@ export async function fulfillWalletTopUpFromSession(
     return { ok: false, message: "Not a wallet top-up session" };
   }
 
-  if (!expectedCentsRaw || Number(expectedCentsRaw) !== paidCents) {
+  const parsedMeta = Number(String(expectedCentsRaw ?? "").trim());
+  if (
+    !expectedCentsRaw ||
+    !Number.isFinite(parsedMeta) ||
+    Math.abs(parsedMeta - paidCents) > 2
+  ) {
     return { ok: false, message: "Amount mismatch" };
   }
 

@@ -1,13 +1,20 @@
 import "server-only";
 
+import type Stripe from "stripe";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CartLine } from "@/lib/perks-order-fulfill";
+import {
+  mapStripeAddressToShopify,
+  mapStripeBillingToShopify,
+  getCustomerNamePhoneForStripeShopify as getStripeNamePhoneForShopify,
+} from "@/lib/stripe/checkout-session-shopify-maps";
 import {
   createPaidOrderInShopify,
   type StripeMirroredLineItem,
 } from "@/lib/shopify/api";
 import {
   getUnitPriceUsd,
+  mergeShopifyCommaTags,
   parseProductSpecifications,
   resolveVariantIdForCheckout,
 } from "@/lib/shopify/product-specifications";
@@ -78,10 +85,8 @@ function mapProfileToShopifyAddress(
   };
 }
 
-/**
- * 余额结账且全部为 dropshipping 时，在 `fulfillPerksShopOrder` 内调用：写 Shopify 已支付订单、客户、地址、扣 Shopify 可售量。
- */
-export async function syncDropshipWalletOrderToShopify(
+/** 任一含 Shopify 变体的行：**余额 / Stripe** 结账后在 Admin 镜像建单（由 Shopify 扣库存）；商品后台 `tags` 并入镜像单 `tags`。 */
+export async function syncMirroredWalletOrderToShopify(
   supabase: SupabaseClient,
   input: {
     userId: string;
@@ -90,27 +95,48 @@ export async function syncDropshipWalletOrderToShopify(
     orderCashPaid: number;
     deductCredits: number;
     products: ProductRow[];
+    stripeCheckoutSession?: Stripe.Checkout.Session | null;
   }
 ): Promise<void> {
-  const { userId, orderId, cartItems, orderCashPaid, deductCredits, products } =
-    input;
+  const {
+    userId,
+    orderId,
+    cartItems,
+    orderCashPaid,
+    deductCredits,
+    products,
+    stripeCheckoutSession,
+  } = input;
   if (cartItems.length === 0) return;
 
   const pmap = new Map(products.map((p) => [p.id, p]));
   const lineVariants: { shopifyVariantId: string; quantity: number }[] = [];
+  const lineCatalog: number[] = [];
+  let sumCatalogUsd = 0;
+
   for (const c of cartItems) {
     const p = pmap.get(c.id);
-    if (!p) return;
-    if ((p.fulfillment_type ?? "").toLowerCase() !== "dropshipping") {
+    if (!p) {
+      await insertErrorLog(supabase, {
+        source: "shopify_order_mirror",
+        message: "Product row missing for Shopify mirror",
+        context: { productId: c.id, orderId },
+        userId,
+        orderId,
+      });
+      await supabase
+        .from("orders")
+        .update({ status: "shopify_sync_failed", updated_at: new Date().toISOString() })
+        .eq("id", orderId);
       return;
     }
     const spec = parseProductSpecifications(p.specifications);
     const vid =
-      resolveVariantIdForCheckout(spec, c.shopifyVariantId) ??
+      resolveVariantIdForCheckout(spec, c.shopifyVariantId ?? null) ??
       getDefaultShopifyVariantIdFromProduct(p.specifications);
     if (!vid) {
       await insertErrorLog(supabase, {
-        source: "shopify_wallet_dropship",
+        source: "shopify_order_mirror",
         message: "Missing shopify_variants in product specifications",
         context: { productId: p.id, orderId },
         userId,
@@ -123,21 +149,29 @@ export async function syncDropshipWalletOrderToShopify(
       return;
     }
     lineVariants.push({ shopifyVariantId: vid, quantity: c.quantity });
+    const fallback = Number(p.discount_price ?? p.original_price ?? 0);
+    const unitUsd = getUnitPriceUsd(spec, vid, fallback);
+    const lineAmt = unitUsd * c.quantity;
+    lineCatalog.push(lineAmt);
+    sumCatalogUsd += lineAmt;
   }
-  if (lineVariants.length !== cartItems.length) return;
+
+  const additionalMirrorTags = mergeShopifyCommaTags(
+    cartItems
+      .map((c) => {
+        const p = pmap.get(c.id);
+        if (!p) return "";
+        const spec = parseProductSpecifications(p.specifications);
+        return spec?.shopify_product_tags ?? "";
+      })
+      .filter(Boolean)
+  );
 
   const { data: auth } = await supabase.auth.admin.getUserById(userId);
-  const email = auth.user?.email?.trim();
-  if (!email) {
-    await insertErrorLog(supabase, {
-      source: "shopify_wallet_dropship",
-      message: "User has no email; cannot create Shopify order",
-      context: { orderId },
-      userId,
-      orderId,
-    });
-    return;
-  }
+
+  let email =
+    stripeCheckoutSession?.customer_details?.email?.trim() ??
+    auth?.user?.email?.trim();
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -149,25 +183,91 @@ export async function syncDropshipWalletOrderToShopify(
     Profile,
     "full_name" | "phone" | "shipping_address"
   >;
-  const { shipping, firstName, lastName } = mapProfileToShopifyAddress(prof);
+  const fromProfile = mapProfileToShopifyAddress(prof);
+  let shipping = fromProfile.shipping;
+  let firstName = fromProfile.firstName;
+  let lastName = fromProfile.lastName;
 
-  const totalUsd = orderCashPaid + deductCredits / 100;
-  const totalCents = Math.max(0, Math.round(totalUsd * 100));
-  if (totalCents < 1) return;
+  if (stripeCheckoutSession) {
+    const shipAd = mapStripeAddressToShopify(stripeCheckoutSession);
+    const billAd = mapStripeBillingToShopify(stripeCheckoutSession);
+    const np = getStripeNamePhoneForShopify(
+      stripeCheckoutSession,
+      shipAd ?? billAd ?? undefined
+    );
+    firstName = np.first_name;
+    lastName = np.last_name;
+    shipping =
+      shipAd ??
+      billAd ?? {
+        first_name: np.first_name,
+        last_name: np.last_name,
+        address1: "—",
+        city: "—",
+        province: "—",
+        country: "US",
+        zip: "—",
+        phone: np.phone,
+      };
+    email =
+      email ??
+      stripeCheckoutSession.customer_email?.trim() ??
+      auth?.user?.email?.trim();
+  }
 
-  let sumCatalogUsd = 0;
-  const lineCatalog: number[] = [];
-  for (const c of cartItems) {
-    const p = pmap.get(c.id)!;
-    const spec = parseProductSpecifications(p.specifications);
-    const rid = resolveVariantIdForCheckout(spec, c.shopifyVariantId) ?? null;
-    const fallback = Number(p.discount_price ?? p.original_price ?? 0);
-    const unit = rid
-      ? getUnitPriceUsd(spec, rid, fallback)
-      : fallback;
-    const t = unit * c.quantity;
-    lineCatalog.push(t);
-    sumCatalogUsd += t;
+  const emailResolved = email?.trim();
+  if (!emailResolved) {
+    await insertErrorLog(supabase, {
+      source: "shopify_order_mirror",
+      message:
+        "No usable email for Shopify order mirror (Stripe session + Auth both empty)",
+      context: { orderId },
+      userId,
+      orderId,
+    });
+    await supabase
+      .from("orders")
+      .update({ status: "shopify_sync_failed", updated_at: new Date().toISOString() })
+      .eq("id", orderId);
+    return;
+  }
+
+  const paidUsdMirror = orderCashPaid + deductCredits / 100;
+  let mirrorUsd = paidUsdMirror;
+  let totalCents = Math.max(0, Math.round(mirrorUsd * 100));
+
+  if (totalCents < 1 && sumCatalogUsd >= 0.01) {
+    mirrorUsd = sumCatalogUsd;
+    totalCents = Math.max(1, Math.round(mirrorUsd * 100));
+    await insertErrorLog(supabase, {
+      source: "shopify_order_mirror",
+      message:
+        "Mirror USD rounded to zero; fallback to catalog subtotal for Shopify",
+      context: {
+        orderId,
+        paidUsdMirror,
+        deductCreditsPts: deductCredits,
+        sumCatalogUsd,
+        centsAfterFallback: totalCents,
+      },
+      userId,
+      orderId,
+    });
+  }
+
+  if (lineVariants.length > 0 && totalCents < 1) {
+    await insertErrorLog(supabase, {
+      source: "shopify_order_mirror",
+      message: "Mirror order total remains zero cents; cannot POST Shopify order",
+      context: { orderId, paidUsdMirror, sumCatalogUsd },
+      userId,
+      orderId,
+    });
+    await supabase
+      .from("orders")
+      .update({ status: "shopify_sync_failed", updated_at: new Date().toISOString() })
+      .eq("id", orderId);
+    return;
   }
 
   let lineItems: StripeMirroredLineItem[] = [];
@@ -186,9 +286,7 @@ export async function syncDropshipWalletOrderToShopify(
       const isLast = i === n - 1;
       const lineCents = isLast
         ? totalCents - allocated
-        : Math.round(
-            (totalCents * (lineCatalog[i] ?? 0)) / sumCatalogUsd
-          );
+        : Math.round((totalCents * (lineCatalog[i] ?? 0)) / sumCatalogUsd);
       if (!isLast) allocated += lineCents;
       const u = (lineCents / 100) / Math.max(1, li.quantity);
       lineItems.push({
@@ -199,39 +297,68 @@ export async function syncDropshipWalletOrderToShopify(
     }
   }
 
+  const stripeRef = stripeCheckoutSession
+    ? {
+        checkoutSessionId: stripeCheckoutSession.id,
+        paymentIntentId:
+          typeof stripeCheckoutSession.payment_intent === "string"
+            ? stripeCheckoutSession.payment_intent
+            : stripeCheckoutSession.payment_intent?.id ?? undefined,
+      }
+    : { checkoutSessionId: `wallet:${orderId}` };
+
+  const billingAddress =
+    stripeCheckoutSession ?
+      mapStripeBillingToShopify(stripeCheckoutSession) ?? { ...shipping }
+    : { ...shipping };
+
+  const stripeNamePhone =
+    stripeCheckoutSession ?
+      getStripeNamePhoneForShopify(stripeCheckoutSession, shipping)
+    : null;
+  const stripePhoneFromDetails =
+    typeof stripeCheckoutSession?.customer_details?.phone === "string"
+      ? stripeCheckoutSession.customer_details.phone.trim()
+      : undefined;
+  const customerPhone =
+    stripeNamePhone?.phone ?? stripePhoneFromDetails ?? prof.phone ?? undefined;
+
   try {
     await createPaidOrderInShopify({
-      stripeReference: {
-        checkoutSessionId: `wallet:${orderId}`,
-      },
-      email,
+      stripeReference: stripeRef,
+      email: emailResolved,
       lineItems,
-      totalAmount: totalUsd.toFixed(2),
+      totalAmount: mirrorUsd.toFixed(2),
       currencyCode: "USD",
-      paymentSource: "wallet",
-      transactionGateway: "Axelerate",
+      paymentSource: stripeCheckoutSession ? "stripe" : "wallet",
+      transactionGateway: stripeCheckoutSession ? "Stripe" : "Axelerate",
       shippingAddress: shipping,
-      billingAddress: { ...shipping },
+      billingAddress,
+      additionalMirrorTags: additionalMirrorTags || undefined,
       customer: {
         first_name: firstName,
         last_name: lastName,
-        email,
-        phone: prof.phone,
+        email: emailResolved,
+        phone: customerPhone ?? null,
       },
       noteAttributes: [
         { name: "platform_user_id", value: userId },
         { name: "supabase_order_id", value: orderId },
         { name: "app", value: "axelerate" },
-        { name: "wallet_cash_usd", value: String(orderCashPaid) },
-        { name: "wallet_credits_points", value: String(deductCredits) },
+        { name: "mirror_cash_usd", value: String(orderCashPaid) },
+        { name: "mirror_credits_pts", value: String(deductCredits) },
+        {
+          name: "checkout_channel",
+          value: stripeCheckoutSession ? "stripe_card_mirrored" : "wallet_mirrored",
+        },
       ],
       sendReceipt: false,
     });
   } catch (e) {
     const err = e as { message?: string };
-    console.error("[wallet-dropship] createPaidOrderInShopify", e, orderId);
+    console.error("[shopify-order-mirror] createPaidOrderInShopify", e, orderId);
     await insertErrorLog(supabase, {
-      source: "shopify_wallet_dropship",
+      source: "shopify_order_mirror",
       message: err.message ?? String(e),
       context: { stack: e instanceof Error ? e.stack : undefined },
       userId,
@@ -243,3 +370,6 @@ export async function syncDropshipWalletOrderToShopify(
       .eq("id", orderId);
   }
 }
+
+/** @deprecated 使用 `syncMirroredWalletOrderToShopify` */
+export const syncDropshipWalletOrderToShopify = syncMirroredWalletOrderToShopify;

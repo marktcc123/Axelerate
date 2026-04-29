@@ -23,10 +23,14 @@ export type ShopifyOptionSpec = {
 export type ProductSpecificationsJson = {
   shopify_variants: ShopifyVariantSpec[];
   shopify_options?: ShopifyOptionSpec[];
+  /** Admin REST `Product.tags` 逗号分隔；镜像建单时并入 Shopify 订单 tags */
+  shopify_product_tags?: string;
 };
 
 export type RestVariantLike = {
   id?: string | number;
+  /** Admin REST 有此字段；可与 `inventory_levels` 对照拉真实 available */
+  inventory_item_id?: string | number;
   price?: string;
   position?: number;
   inventory_quantity?: number;
@@ -96,6 +100,49 @@ export function buildProductSpecificationsFromRest(
   return out;
 }
 
+/**
+ * 将 Shopify 商品 `tags` 写入 `specifications`（与 `shopify_variants` 并存）。
+ * 若没有变体片段（specs null），不写仅含 tags 的对象，以免覆盖表中已有 specifications。
+ */
+export function attachShopifyProductTags(
+  specs: Record<string, unknown> | null,
+  tagsCommaSeparated: string | null | undefined
+): Record<string, unknown> | null {
+  const t = (tagsCommaSeparated ?? "").trim();
+  if (!specs) return null;
+  if (!t) return { ...specs };
+  const out = { ...specs, shopify_product_tags: t.slice(0, 4000) };
+  return Object.keys(out).length ? out : null;
+}
+
+/** 合并多来源逗号分隔标签（去重、截断）；用于镜像订单 Shopify `tags`。 */
+export function mergeShopifyCommaTags(
+  segments: Array<string | null | undefined>
+): string {
+  const set = new Set<string>();
+  for (const raw of segments) {
+    const s = String(raw ?? "").trim();
+    if (!s) continue;
+    for (const p of s.split(",")) {
+      const t = p.trim();
+      if (t) set.add(t.slice(0, 80));
+      if (set.size >= 50) break;
+    }
+  }
+  return [...set].join(", ").slice(0, 950);
+}
+
+/** App 购物车行是否可映射为 Shopify variant 并参与镜像单（代销/自营只要来自 Shopify 皆可）。 */
+export function cartLineHasResolvableShopifyVariant(
+  product: { specifications: unknown },
+  cartLine: { shopifyVariantId?: string | null | undefined }
+): boolean {
+  const spec = parseProductSpecifications(product.specifications);
+  if (!spec?.shopify_variants?.length) return false;
+  const vid = resolveVariantIdForCheckout(spec, cartLine.shopifyVariantId ?? undefined);
+  return Boolean(vid);
+}
+
 export function parseProductSpecifications(raw: unknown): ProductSpecificationsJson | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
@@ -143,9 +190,19 @@ export function parseProductSpecifications(raw: unknown): ProductSpecificationsJ
     if (parsed.length) shopify_options = parsed.sort((a, b) => a.position - b.position);
   }
 
-  return shopify_options?.length
+  const tagsRaw = o.shopify_product_tags;
+  const shopify_product_tags =
+    tagsRaw != null && String(tagsRaw).trim() !== ""
+      ? String(tagsRaw).trim().slice(0, 4000)
+      : undefined;
+
+  const base: ProductSpecificationsJson = shopify_options?.length
     ? { shopify_variants, shopify_options }
     : { shopify_variants };
+
+  return shopify_product_tags
+    ? { ...base, shopify_product_tags }
+    : base;
 }
 
 function parsePriceNumberLocal(price: string | undefined | null): number {
