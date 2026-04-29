@@ -57,6 +57,13 @@ function getAdminTokenIfConfigured(): string | null {
   return t || null;
 }
 
+/** Stripe / 服务端镜像建单前检查：两处 env 均需配置且与 Custom App Admin API 令牌一致（Vercel Production 常与本地 .env.local 漏配一端）。 */
+export function isShopifyAdminConfiguredForMirroring(): boolean {
+  const d = process.env.SHOPIFY_STORE_DOMAIN?.trim();
+  const t = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN?.trim();
+  return Boolean(d && t);
+}
+
 /**
  * 按商品数字 ID 拉取 Admin REST **完整** Product JSON（含 `images[]`、`body_html`）。
  * 用于补足 `products/update` Webhook 中第三方同步（如 Trendsi）带来的**不完整**载荷。

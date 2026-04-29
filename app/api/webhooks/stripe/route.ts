@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getStripe } from "@/lib/stripe/server";
 import { fulfillPerksShopOrder } from "@/lib/perks-order-fulfill";
 import { fulfillWalletTopUpFromSession } from "@/lib/stripe/fulfill-wallet-topup";
-import { createPaidOrderInShopify } from "@/lib/shopify/api";
+import { createPaidOrderInShopify, isShopifyAdminConfiguredForMirroring } from "@/lib/shopify/api";
 import {
   mapStripeAddressToShopify,
   mapStripeBillingToShopify,
@@ -362,6 +362,29 @@ async function handleDropshippingSession(
         parseProductSpecifications(r.specifications)?.shopify_product_tags
       )
     );
+  }
+
+  if (!isShopifyAdminConfiguredForMirroring()) {
+    const cfgErr = new Error(
+      "Shopify Admin not configured: set SHOPIFY_STORE_DOMAIN (e.g. your-store.myshopify.com) and SHOPIFY_ADMIN_ACCESS_TOKEN on the server (e.g. Vercel Production env), then redeploy."
+    );
+    console.error("[stripe webhook] dropshipping:", cfgErr.message, sessionId);
+    await logShopifyOrderCreateFailure(supabase, cfgErr, {
+      userId,
+      orderId,
+      checkoutSessionId: sessionId,
+    });
+    const { error: cfgUp } = await supabase
+      .from("orders")
+      .update({
+        status: "shopify_sync_failed",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", orderId);
+    if (cfgUp) {
+      console.error("[stripe webhook] dropshipping: mark shopify_sync_failed", cfgUp, orderId);
+    }
+    return new Response("ok", { status: 200 });
   }
 
   try {

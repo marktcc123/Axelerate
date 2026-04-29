@@ -10,6 +10,7 @@ import {
 } from "@/lib/stripe/checkout-session-shopify-maps";
 import {
   createPaidOrderInShopify,
+  isShopifyAdminConfiguredForMirroring,
   type StripeMirroredLineItem,
 } from "@/lib/shopify/api";
 import {
@@ -322,6 +323,22 @@ export async function syncMirroredWalletOrderToShopify(
       : undefined;
   const customerPhone =
     stripeNamePhone?.phone ?? stripePhoneFromDetails ?? prof.phone ?? undefined;
+
+  if (!isShopifyAdminConfiguredForMirroring()) {
+    await insertErrorLog(supabase, {
+      source: "shopify_order_mirror",
+      message:
+        "Shopify Admin not configured: set SHOPIFY_STORE_DOMAIN and SHOPIFY_ADMIN_ACCESS_TOKEN on the server, then redeploy.",
+      context: { orderId },
+      userId,
+      orderId,
+    });
+    await supabase
+      .from("orders")
+      .update({ status: "shopify_sync_failed", updated_at: new Date().toISOString() })
+      .eq("id", orderId);
+    return;
+  }
 
   try {
     await createPaidOrderInShopify({
