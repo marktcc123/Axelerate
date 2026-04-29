@@ -15,6 +15,9 @@ const MARQUEE_PARTS = [
   "AXELERATING BRANDS",
 ];
 
+const LANDING_TITLE_LINE =
+  "w-full text-left text-[clamp(2.5rem,10.5vw,6.25rem)] font-black uppercase leading-[0.87] tracking-[-0.04em] text-white [text-shadow:4px_4px_0_rgb(0_0_0)] sm:leading-[0.9] dark:text-white";
+
 export function LandingHero() {
   const sequence = [0, 0.06, 0.14, 0.26, 0.36];
 
@@ -37,49 +40,51 @@ export function LandingHero() {
         </div>
       </div>
 
-      <div className="grid min-h-[min(100dvh,880px)] grid-cols-1 md:grid-cols-2">
-        <div className="flex flex-col justify-center gap-7 border-b-2 border-border px-6 py-12 md:gap-8 md:border-b-0 md:border-r-2 md:border-border md:px-10 lg:px-14">
-          <motion.p
-            className="max-w-xl font-mono text-[11px] font-bold uppercase leading-tight tracking-[0.28em] text-muted-foreground sm:text-xs"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, delay: sequence[0] }}
-          >
-            Connecting students with top brands
-          </motion.p>
+      <div className="grid min-h-[min(92dvh,820px)] grid-cols-1 md:grid-cols-2">
+        <div className="flex flex-col justify-center gap-0 border-b-2 border-border px-6 py-8 md:border-b-0 md:border-r-2 md:border-border md:px-10 md:py-10 lg:px-14">
+          <div className="-mx-1 mb-6 w-[calc(100%+0.5rem)] overflow-x-auto overflow-y-hidden [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <motion.p
+              className="inline-block min-w-max text-left font-mono text-[0.6875rem] font-bold uppercase leading-none tracking-[0.06em] text-purple-200 drop-shadow-[0_2px_12px_rgb(0_0_0/0.55)] dark:text-purple-100/95 sm:text-xs sm:tracking-[0.12em] md:text-sm md:tracking-[0.2em]"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45, delay: sequence[0] }}
+            >
+              YOUR BACKSTAGE PASS TO GLOBAL BRANDS &amp; EXCLUSIVE PERKS
+            </motion.p>
+          </div>
 
           <motion.div
-            className="max-w-2xl"
+            className="max-w-none"
             initial={{ opacity: 0, y: 26 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: sequence[1] }}
           >
-            <h1 className="font-display text-5xl leading-[0.88] tracking-[-0.02em] text-foreground sm:text-6xl md:text-7xl lg:text-8xl xl:text-[5.5rem]">
-              <span className="block">Make moves.</span>
-              <span className="mt-1 block bg-gradient-to-r from-brand-primary via-purple-500 to-purple-400 bg-clip-text text-transparent sm:mt-1.5">
-                Get paid.
-              </span>
-              <span className="mt-1 block sm:mt-1.5">Unlock perks.</span>
+            <h1 className="flex w-full flex-col items-start text-left font-display">
+              <div className={LANDING_TITLE_LINE}>COP DROPS.</div>
+              <div className={LANDING_TITLE_LINE}>CREATE IMPACT.</div>
+              <div className={LANDING_TITLE_LINE}>CASH OUT.</div>
             </h1>
           </motion.div>
 
           <motion.div
-            className="max-w-xl space-y-4"
+            className="mt-8 max-w-2xl text-left md:mb-6"
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.48, delay: sequence[2] }}
           >
-            <p className="font-mono text-sm font-medium leading-relaxed tracking-tight text-foreground md:text-[0.95rem] md:leading-7">
-              Turn your campus influence into cash. Complete digital UGC drops for top brands, attend to
-              exclusive offline pop-ups, and stack XP to level up your lifestyle.
-            </p>
-            <p className="font-mono text-xs font-medium leading-relaxed tracking-tight text-muted-foreground md:text-sm md:leading-6">
-              Earn money, unlocal perks, level up, exclusively for Students.
+            <p className="font-mono text-sm font-medium leading-relaxed tracking-tight text-white md:text-[0.98rem] md:leading-relaxed [&>span]:block">
+              <span className="text-white/93">
+                The #1 pioneer Gen-Z Launchpad connecting the premiere campus ecosystem of retail,
+                marketing, and professional growth.
+              </span>
+              <span className="mt-3 block font-semibold leading-relaxed text-white md:mt-3.5">
+                Your impact starts here.
+              </span>
             </p>
           </motion.div>
 
           <motion.div
-            className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center"
+            className="mt-6 flex w-full max-w-xl flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-start md:mt-8"
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.48, delay: sequence[4] }}

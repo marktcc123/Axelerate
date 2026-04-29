@@ -8,6 +8,10 @@ import {
   GRAINIENT_STUDIO_COLORS,
 } from "@/components/ui/background-effect";
 
+/** Neo-brutalist 钢印：Splash 全屏居中；手机端 clamp 下限抬高 */
+const HERO_TITLE_LINE =
+  "w-full text-center text-[clamp(2.875rem,12vw,7.75rem)] font-black uppercase leading-[0.87] tracking-[-0.04em] text-white [text-shadow:4px_4px_0_rgb(0_0_0)] sm:leading-[0.9]";
+
 interface SplashScreenProps {
   onComplete: () => void;
 }
@@ -58,38 +62,43 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
 
       <div className="relative z-10 flex min-h-[100dvh] w-full flex-1 flex-col">
         <motion.div
-          className="flex flex-1 flex-col items-center justify-center py-10"
+          className="flex flex-1 flex-col justify-center px-5 py-5 md:px-8 md:py-7"
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.55, delay: 0.05 }}
         >
-          <div className="flex max-w-full flex-col items-center justify-center px-6 text-center text-white pointer-events-none z-10 md:mt-[-5vh]">
-            <div className="mb-4">
+          <div className="pointer-events-none z-10 flex w-full max-w-none flex-col items-center text-center text-white md:-mt-[2vh]">
+            <div className="mb-2.5 flex justify-center md:mb-3">
               <GradientText
                 colors={["#5227FF", "#FF9FFC", "#B19EEF"]}
                 animationSpeed={8}
                 showBorder={false}
-                className="rounded-none border-0 bg-transparent p-0 shadow-none backdrop-blur-none text-xl font-black tracking-[0.4em] md:text-2xl"
+                className="rounded-none border-0 bg-transparent p-0 shadow-none backdrop-blur-none text-lg font-black tracking-[0.38em] md:text-2xl md:tracking-[0.4em]"
               >
                 AXELERATE
               </GradientText>
             </div>
-            <p className="mb-6 font-mono text-xs uppercase tracking-[0.2em] text-white/70 md:text-sm">
-              CONNECTING CAMPUS CREATORS WITH TOP BRANDS
-            </p>
+            <div className="-mx-1 mb-6 flex w-full max-w-[100vw] justify-center overflow-x-auto overflow-y-hidden [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <p className="inline-block min-w-max max-w-none text-center font-mono text-[0.6875rem] font-bold uppercase leading-none tracking-[0.08em] text-purple-100/95 drop-shadow-[0_2px_14px_rgb(0_0_0/0.75)] sm:text-xs sm:tracking-[0.14em] md:text-sm md:tracking-[0.2em]">
+                YOUR BACKSTAGE PASS TO GLOBAL BRANDS &amp; EXCLUSIVE PERKS
+              </p>
+            </div>
 
-            <h1 className="mb-8 text-5xl font-black uppercase leading-[0.95] tracking-tighter text-white drop-shadow-2xl md:text-7xl lg:text-[6.5rem]">
-              TURN YOUR INFLUENCE
-              <br />
-              INTO CASH &amp; PERKS.
+            <h1 className="flex w-full max-w-none flex-col items-center px-0">
+              <div className={HERO_TITLE_LINE}>COP DROPS.</div>
+              <div className={HERO_TITLE_LINE}>CREATE IMPACT.</div>
+              <div className={HERO_TITLE_LINE}>CASH OUT.</div>
             </h1>
 
-            <p className="mx-auto mb-10 max-w-2xl font-sans text-base font-medium leading-relaxed text-white/90 md:text-lg">
-              The pioneer campus platform empowering creators to grow with top brands, experience
-              exclusive drops, and earn.
+            <p className="mx-auto mb-5 mt-8 max-w-2xl text-center font-sans text-[0.875rem] font-medium leading-relaxed tracking-tight text-white/[0.93] md:mb-6 md:text-base [&>span]:block [&>span:not(:first-child)]:mt-3">
+              <span>
+                The #1 pioneer Gen-Z Launchpad connecting the premiere campus ecosystem of retail,
+                marketing, and professional growth.
+              </span>
+              <span className="font-semibold text-white">Your impact starts here.</span>
             </p>
 
-            <div className="mt-10 flex items-center justify-center gap-2 font-mono text-xl text-white/80 md:text-2xl">
+            <div className="mt-5 flex flex-wrap items-baseline justify-center gap-x-2 gap-y-2 font-mono text-base text-white/80 md:mt-6 md:text-2xl">
               <span className="font-bold tracking-wide text-white">AXELERATE your </span>
               <TextType
                 as="span"
@@ -110,8 +119,30 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
           </div>
         </motion.div>
 
-        <div className="pointer-events-none shrink-0 px-4 pb-[max(3rem,env(safe-area-inset-bottom))] pt-6 text-center text-xs font-mono tracking-[0.3em] text-white/50 animate-pulse md:text-sm">
-          TAP ANYWHERE TO CONTINUE
+        <div className="pointer-events-none flex w-full shrink-0 flex-col items-center px-6 pb-[max(2.25rem,env(safe-area-inset-bottom))] pt-4 md:px-8">
+          <motion.span
+            className="mb-2 block select-none font-mono text-lg leading-none text-white/65 md:text-xl"
+            aria-hidden
+            animate={{ y: [0, 5, 0] }}
+            transition={{
+              repeat: Infinity,
+              duration: 2.8,
+              ease: "easeInOut",
+            }}
+          >
+            ↓
+          </motion.span>
+          <motion.p
+            className="text-center font-mono text-[11px] tracking-[0.28em] text-white md:text-sm"
+            animate={{ opacity: [0.3, 0.7, 0.3] }}
+            transition={{
+              repeat: Infinity,
+              duration: 5.5,
+              ease: "easeInOut",
+            }}
+          >
+            TAP ANYWHERE TO CONTINUE
+          </motion.p>
         </div>
       </div>
     </motion.div>
