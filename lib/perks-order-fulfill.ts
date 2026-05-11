@@ -12,7 +12,13 @@ import {
 } from "@/lib/shopify/product-specifications";
 import { getDefaultShopifyVariantIdFromProduct } from "@/lib/shopify/dropship-from-product";
 export type CheckoutFulfillResult =
-  | { success: true }
+  | {
+      success: true;
+      /** Present when a new order row was created in this call */
+      orderId?: string;
+      /** Mirror-line payment split (Shopify); same as used for sync when enabled */
+      mirrorPaidShare?: { cash: number; credits: number };
+    }
   | { success: false; error: string };
 
 export type CartLine = {
@@ -62,8 +68,10 @@ export async function fulfillPerksShopOrder(
     deductCredits: number;
     orderCashPaid: number;
     stripeCheckoutSessionId?: string | null;
-    /** Stripe 卡支付回填 Session，供 Shopify 镜像单使用收货信息与 session id（混合车）。 */
+    /** Stripe 卡支付回填 Session，供 `syncMirroredWalletOrderToShopify` 使用收货信息与 session id（混合车）。 */
     stripeCheckoutSession?: Stripe.Checkout.Session | null;
+    skipMirroredShopifySync?: boolean;
+    skipProductPurchaseInserts?: boolean;
   }
 ): Promise<CheckoutFulfillResult> {
   const {
@@ -74,6 +82,8 @@ export async function fulfillPerksShopOrder(
     orderCashPaid,
     stripeCheckoutSessionId,
     stripeCheckoutSession,
+    skipMirroredShopifySync = false,
+    skipProductPurchaseInserts = false,
   } = options;
 
   if (stripeCheckoutSessionId) {
@@ -82,7 +92,7 @@ export async function fulfillPerksShopOrder(
       .select("id")
       .eq("stripe_checkout_session_id", stripeCheckoutSessionId)
       .maybeSingle();
-    if (dup) return { success: true };
+    if (dup) return { success: true, orderId: dup.id as string | undefined };
   }
 
   const productIds = cartItems.map((c) => c.id);
@@ -237,25 +247,36 @@ export async function fulfillPerksShopOrder(
         insertOrderError.code === "23505" &&
         String(insertOrderError.message).includes("stripe_checkout_session_id")
       ) {
-        return { success: true };
+        const { data: existing } = await supabase
+          .from("orders")
+          .select("id")
+          .eq("stripe_checkout_session_id", stripeCheckoutSessionId as string)
+          .maybeSingle();
+        return {
+          success: true,
+          orderId: existing?.id as string | undefined,
+          mirrorPaidShare,
+        };
       }
       console.error("[fulfillPerksShopOrder] insert order:", insertOrderError);
       return { success: false, error: "Order creation failed" };
     }
 
-    for (const item of cartItems) {
-      await supabase.from("product_purchases").insert({
-        user_id: userId,
-        product_id: item.id,
-        quantity: item.quantity,
-      });
+    if (!skipProductPurchaseInserts) {
+      for (const item of cartItems) {
+        await supabase.from("product_purchases").insert({
+          user_id: userId,
+          product_id: item.id,
+          quantity: item.quantity,
+        });
+      }
     }
 
     if (insertedOrder?.id) {
       const mirrorProducts = (products ?? []).filter((p) =>
         mirrorLines.some((l) => l.id === p.id)
       );
-      if (mirrorLines.length > 0) {
+      if (mirrorLines.length > 0 && !skipMirroredShopifySync) {
         const { syncMirroredWalletOrderToShopify } = await import(
           "@/lib/shopify/wallet-dropship-order"
         );
@@ -275,7 +296,11 @@ export async function fulfillPerksShopOrder(
       revalidatePath(`/product/${item.id}`);
     }
 
-    return { success: true };
+    return {
+      success: true,
+      orderId: insertedOrder?.id as string | undefined,
+      mirrorPaidShare,
+    };
   } catch (e) {
     console.error("[fulfillPerksShopOrder] error:", e);
     return { success: false, error: "Checkout failed" };

@@ -11,7 +11,6 @@ import {
   X,
   Gift,
   Link2,
-  QrCode,
   AlertTriangle,
   Zap,
   Trash2,
@@ -24,7 +23,7 @@ import {
   Star,
 } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { cn, copyTextToClipboard } from "@/lib/utils";
 import { ProductCardHoverImage } from "@/components/product-card-hover-image";
 import {
   Drawer,
@@ -47,6 +46,7 @@ import { Checkbox } from "./ui/checkbox";
 import { Label } from "./ui/label";
 import Confetti from "react-confetti";
 import { processCheckout } from "@/app/actions/checkout";
+import { purchasePerksGiftCheckout } from "@/app/actions/gift-checkout";
 import {
   createStripeCheckoutSession,
   createDropshippingStripeCheckoutSession,
@@ -54,7 +54,12 @@ import {
 } from "@/app/actions/stripe-checkout";
 import { joinWaitlist } from "@/app/actions/shop";
 import { useCartStore } from "@/store/cart-store";
-import { getUnitPriceUsd, parseProductSpecifications } from "@/lib/shopify/product-specifications";
+import {
+  findVariantInSpecifications,
+  getDefaultVariantId,
+  getUnitPriceUsd,
+  parseProductSpecifications,
+} from "@/lib/shopify/product-specifications";
 import { createClient } from "@/lib/supabase/client";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
@@ -900,100 +905,284 @@ function GiftDrawer({
   product,
   open,
   onOpenChange,
+  profile,
+  userId,
+  refetchPrivate,
 }: {
   product: Product;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  profile: { cash_balance: number; credit_balance?: number } | null;
+  userId: string | null;
+  refetchPrivate: () => Promise<void>;
 }) {
   const [sent, setSent] = useState(false);
-  const salePrice =
-    product.discount_price ?? product.original_price ?? product.price_credits;
+  const [giftHref, setGiftHref] = useState("");
+  const [showGiftConfetti, setShowGiftConfetti] = useState(false);
+  const [giftPending, startGiftTransition] = useTransition();
 
-  const handleSend = () => {
-    setSent(true);
-    toast.success("Gift link created!", {
-      description: "Share with your friend to claim.",
+  const spec = parseProductSpecifications(product.specifications);
+  const variantIdRaw = getDefaultVariantId(spec);
+  const resolvedVariant =
+    variantIdRaw && findVariantInSpecifications(spec, variantIdRaw) ?
+      variantIdRaw
+    : null;
+
+  const fallback = Number(product.discount_price ?? product.original_price ?? 0);
+  const unit = getUnitPriceUsd(spec, resolvedVariant, fallback);
+
+  const [creditsToUse, setCreditsToUse] = useState(0);
+
+  const userBalance = Number(profile?.cash_balance ?? 0);
+  const userCredits = Number(profile?.credit_balance ?? 0);
+
+  const subtotal = unit;
+  const maxCreditsAllowed = Math.min(userCredits, Math.floor(subtotal * 100));
+
+  useEffect(() => {
+    setCreditsToUse((c) => Math.min(c, maxCreditsAllowed));
+  }, [maxCreditsAllowed]);
+
+  useEffect(() => {
+    if (!open) return;
+    setSent(false);
+    setGiftHref("");
+    setCreditsToUse(0);
+    setShowGiftConfetti(false);
+  }, [open, product.id]);
+
+  const creditsDiscount = creditsToUse / 100;
+  const finalTotal = Math.max(0, subtotal - creditsDiscount);
+  const canPayGift =
+    Boolean(userId) && userCredits >= creditsToUse && finalTotal <= userBalance;
+
+  const handlePurchaseGift = () => {
+    if (!userId) {
+      toast.error("Sign in to send a gift");
+      return;
+    }
+    startGiftTransition(async () => {
+      const res = await purchasePerksGiftCheckout(
+        product.id,
+        resolvedVariant,
+        creditsToUse
+      );
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      const absolute =
+        typeof window !== "undefined" ?
+          `${window.location.origin}${res.giftUrlPath}`
+        : res.giftUrlPath;
+      setGiftHref(absolute);
+      setSent(true);
+      setShowGiftConfetti(true);
+      setTimeout(() => setShowGiftConfetti(false), 5500);
+      toast.success("Gift link ready");
+      await refetchPrivate();
     });
   };
 
   return (
-    <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="max-h-[90vh] border-t-2 border-border bg-card text-card-foreground dark:border-white/10 dark:bg-zinc-950 [&>div:first-child]:bg-muted dark:[&>div:first-child]:bg-white/20">
-        <div className="relative px-6 pb-8">
-          <DrawerClose className="absolute right-4 top-0 flex h-8 w-8 items-center justify-center rounded-full border-2 border-border bg-muted text-foreground shadow-sm dark:border-transparent dark:bg-white/10">
-            <X className="h-4 w-4" />
-          </DrawerClose>
-
-          <DrawerHeader className="p-0">
-            <div className="mb-4 flex items-center gap-2">
-              <Gift className="h-5 w-5 text-brand-primary" />
-              <DrawerTitle className="text-lg font-black text-foreground dark:text-white">
-                Send as Gift
-              </DrawerTitle>
-            </div>
-          </DrawerHeader>
-
-          {!sent ? (
-            <>
-              <div className="mb-4 flex items-center gap-3 rounded-xl border-2 border-border bg-muted/40 p-3 shadow-sm dark:border-white/10 dark:bg-white/5">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted dark:bg-white/5">
-                  <Package className="h-6 w-6 text-muted-foreground" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-foreground dark:text-white">{product.title}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {product.brand?.name ?? "—"} - ${Number(salePrice)}
-                  </p>
-                </div>
-              </div>
-
-              <p className="mb-4 text-xs text-muted-foreground">
-                Use your points balance to buy this item and generate a shareable
-                link or QR code for a friend to claim.
-              </p>
-
-              <button
-                onClick={handleSend}
-                className="btn-primary-glow flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-border bg-brand-primary py-4 text-sm font-black uppercase tracking-wider text-white transition-all active:scale-[0.98]"
-              >
-                <Gift className="h-4 w-4" />
-                Send Gift ({Number(salePrice) * 10} pts)
-              </button>
-            </>
-          ) : (
-            <div className="flex flex-col items-center py-4 text-center">
-              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-primary/10">
-                <CheckCircle2 className="h-8 w-8 text-brand-primary" />
-              </div>
-              <h4 className="mb-1 text-base font-black text-foreground dark:text-white">
-                Gift Ready!
-              </h4>
-              <p className="mb-6 text-xs text-muted-foreground">
-                Share this link with your friend to claim their gift.
-              </p>
-
-              <div className="mb-4 flex w-full items-center gap-2 rounded-xl border-2 border-border bg-muted/40 px-3 py-2.5 shadow-sm dark:border-white/10 dark:bg-white/5">
-                <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="truncate text-xs font-mono text-foreground dark:text-white">
-                  axelerate.app/gift/a8f3k2...
-                </span>
-                <button
-                  onClick={() => toast.success("Link copied!")}
-                  className="shrink-0 rounded-lg border-2 border-border bg-brand-primary px-3 py-1 text-[10px] font-bold text-white"
-                >
-                  Copy
-                </button>
-              </div>
-
-              <button className="flex items-center gap-2 rounded-xl border-2 border-border bg-muted/40 px-4 py-2.5 text-xs font-bold text-foreground shadow-sm transition-colors hover:bg-muted dark:border-white/10 dark:bg-white/5 dark:text-white">
-                <QrCode className="h-4 w-4" />
-                Show QR Code
-              </button>
-            </div>
-          )}
+    <>
+      {showGiftConfetti ?
+        <div className="pointer-events-none fixed inset-0 z-[9999]">
+          <Confetti
+            width={typeof window !== "undefined" ? window.innerWidth : 400}
+            height={typeof window !== "undefined" ? window.innerHeight : 600}
+            recycle={false}
+            numberOfPieces={320}
+          />
         </div>
-      </DrawerContent>
-    </Drawer>
+      : null}
+      <Drawer open={open} onOpenChange={onOpenChange}>
+        <DrawerContent className="max-h-[90vh] border-t-2 border-border bg-card text-card-foreground dark:border-white/10 dark:bg-zinc-950 [&>div:first-child]:bg-muted dark:[&>div:first-child]:bg-white/20">
+          <div className="relative px-6 pb-8">
+            <DrawerClose className="absolute right-4 top-0 flex h-8 w-8 items-center justify-center rounded-full border-2 border-border bg-muted text-foreground shadow-sm dark:border-transparent dark:bg-white/10">
+              <X className="h-4 w-4" />
+            </DrawerClose>
+
+            <DrawerHeader className="p-0">
+              <div className="mb-4 flex items-center gap-2">
+                <Gift className="h-5 w-5 text-brand-primary" />
+                <DrawerTitle className="text-lg font-black text-foreground dark:text-white">
+                  Send as Gift
+                </DrawerTitle>
+              </div>
+            </DrawerHeader>
+
+            {!sent ? (
+              <>
+                <div className="mb-4 flex items-center gap-3 rounded-xl border-2 border-border bg-muted/40 p-3 shadow-sm dark:border-white/10 dark:bg-white/5">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted dark:bg-white/5">
+                    {product.image_url ?
+                      <img
+                        src={product.image_url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    : <Package className="h-6 w-6 text-muted-foreground" />}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-foreground dark:text-white">
+                      {product.title}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {product.brand?.name ?? "—"}
+                    </p>
+                    <p className="mt-1 text-sm font-black text-brand-primary">
+                      ${subtotal.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+
+                <p className="mb-3 rounded-xl border border-dashed border-amber-500/35 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                  Pay once with credits + Axelerate wallet (same checkout rules as cart).
+                  Shopify dropship parcels ship only after your friend unwraps — it becomes their{" "}
+                  <span className="font-semibold text-foreground">My Orders</span> entry ($0 pickup).
+                  You&apos;ll also see your gift receipt in Orders.
+                </p>
+
+                <div className="mb-4 rounded-xl border-2 border-border bg-muted/30 p-3 dark:border-white/10">
+                  <div className="mb-3 flex justify-between gap-4 text-[11px]">
+                    <div>
+                      <p className="uppercase tracking-wider text-muted-foreground">Cash balance</p>
+                      <p className="font-mono font-black text-emerald-500 dark:text-emerald-400">
+                        ${userBalance.toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="uppercase tracking-wider text-muted-foreground">Credits</p>
+                      <p className="flex items-center justify-end gap-1 font-mono font-black text-amber-400">
+                        <Zap className="h-4 w-4 fill-amber-400" aria-hidden /> {userCredits} Pts
+                      </p>
+                    </div>
+                  </div>
+
+                  {maxCreditsAllowed > 0 ?
+                    <>
+                      <p className="mb-2 text-[11px] font-medium text-foreground dark:text-zinc-200">
+                        Credits (100 Pts = $1)
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min={0}
+                          max={maxCreditsAllowed}
+                          step={100}
+                          value={creditsToUse}
+                          onChange={(e) => setCreditsToUse(Number(e.target.value))}
+                          className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-muted accent-amber-500 dark:bg-zinc-800 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-amber-500 [&::-webkit-slider-thumb]:appearance-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setCreditsToUse(maxCreditsAllowed)}
+                          className="shrink-0 rounded bg-amber-500/20 px-3 py-1 text-[11px] font-bold text-amber-400 hover:bg-amber-500/30"
+                        >
+                          MAX
+                        </button>
+                      </div>
+                      <p className="mt-2 text-[10px] text-muted-foreground">
+                        Applying {creditsToUse} Pts · owes ${finalTotal.toFixed(2)} from wallet.
+                      </p>
+                    </>
+                  : <p className="text-[11px] text-muted-foreground">No credits apply at this tier.</p>
+                  }
+
+                  {!canPayGift && userId ?
+                    <p className="mt-3 text-[11px] font-medium text-amber-600 dark:text-amber-300">
+                      {userCredits < creditsToUse ?
+                        "Lower credits slider — insufficient points."
+                      : null}
+                      {finalTotal > userBalance ?
+                        ` Wallet needs $${finalTotal.toFixed(2)} after credits (currently $${userBalance.toFixed(2)}).`
+                      : null}
+                    </p>
+                  : null}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={giftPending || !canPayGift}
+                  onClick={handlePurchaseGift}
+                  className="btn-primary-glow flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-border bg-brand-primary py-4 text-sm font-black uppercase tracking-wider text-white transition-all hover:bg-brand-primary/95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {giftPending ?
+                    <Loader className="h-4 w-4 animate-spin" />
+                  : <Gift className="h-4 w-4" />}
+                  Pay & generate link (${finalTotal.toFixed(2)})
+                </button>
+              </>
+            ) : (
+              <div className="flex flex-col items-center py-2 text-center">
+                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-primary/15">
+                  <CheckCircle2 className="h-8 w-8 text-brand-primary" />
+                </div>
+                <h4 className="mb-1 text-base font-black text-foreground dark:text-white">
+                  Gift unlocked for sharing
+                </h4>
+                <p className="mb-5 text-xs text-muted-foreground">
+                  Copy & text it — your Orders tab keeps the receipt forever.
+                </p>
+
+                <div className="mb-5 flex w-full items-center gap-2 rounded-xl border-2 border-border bg-muted/40 px-3 py-2.5 shadow-sm dark:border-white/10 dark:bg-white/5">
+                  <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate text-left text-[11px] font-mono text-foreground dark:text-white">
+                    {giftHref.replace(/^https:\/\//, "") || "Generating…"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await copyTextToClipboard(giftHref);
+                      if (ok) toast.success("Copied");
+                      else {
+                        toast.error(
+                          "Copy blocked — paste manually or use HTTPS.",
+                        );
+                      }
+                    }}
+                    className="shrink-0 rounded-lg border-2 border-border bg-brand-primary px-3 py-1 text-[10px] font-bold text-white dark:border-transparent"
+                  >
+                    Copy
+                  </button>
+                </div>
+
+                <p className="mb-3 text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                  Scan-ready (share screen)
+                </p>
+                {giftHref ?
+                  <QrCodePreview href={giftHref} />
+                : null}
+
+                <p className="mt-6 text-[10px] text-muted-foreground">
+                  Friend flow: `/gift/[token]` → login → unwrap → Ships from their Orders.
+                </p>
+              </div>
+            )}
+          </div>
+        </DrawerContent>
+      </Drawer>
+    </>
+  );
+}
+
+function QrCodePreview({ href }: { href: string }) {
+  /** Lightweight QR placeholder using Google Charts · works offline CDN */
+  const src = useMemo(() => {
+    const enc = encodeURIComponent(href);
+    return `https://api.qrserver.com/v1/create-qr-code/?size=156x156&data=${enc}`;
+  }, [href]);
+
+  return (
+    <img
+      src={src}
+      alt="Gift QR"
+      width={156}
+      height={156}
+      className="rounded-xl border-2 border-border bg-white p-2 dark:border-white/10"
+      loading="lazy"
+    />
   );
 }
 
@@ -1838,6 +2027,16 @@ export function PerksShop() {
             setGiftDrawerOpen(o);
             if (!o) setTimeout(() => setGiftModalProduct(null), 350);
           }}
+          profile={
+            profile
+              ? {
+                  cash_balance: profile.cash_balance,
+                  credit_balance: profile.credit_balance,
+                }
+              : null
+          }
+          userId={user?.id ?? null}
+          refetchPrivate={refetchPrivate}
         />
       )}
     </div>

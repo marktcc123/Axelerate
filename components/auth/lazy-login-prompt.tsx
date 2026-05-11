@@ -11,9 +11,14 @@ export type LoginPromptVariant = "default" | "onboarding";
 interface LazyLoginPromptProps {
   /** `onboarding`: light card on landing/auth sheet, aligned with app theme tokens */
   variant?: LoginPromptVariant;
+  /** Absolute path starting with `/`; appended to OAuth / magic-link callback (`?next=`) */
+  redirectPath?: string;
 }
 
-export function LazyLoginPrompt({ variant = "default" }: LazyLoginPromptProps) {
+export function LazyLoginPrompt({
+  variant = "default",
+  redirectPath,
+}: LazyLoginPromptProps) {
   const isOnboarding = variant === "onboarding";
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -21,12 +26,24 @@ export function LazyLoginPrompt({ variant = "default" }: LazyLoginPromptProps) {
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const supabase = createClient();
 
+  const nextQuery =
+    redirectPath &&
+    redirectPath.startsWith("/") &&
+    !redirectPath.startsWith("//") &&
+    !redirectPath.includes("://") ?
+      `?next=${encodeURIComponent(redirectPath)}`
+    : "";
+
+  const callbackUrl = `${
+    typeof window !== "undefined" ? window.location.origin : ""
+  }/auth/callback${nextQuery}`;
+
   const handleGoogleLogin = () => {
     if (!agreedToTerms) return;
     supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/callback`,
+        redirectTo: callbackUrl,
       },
     });
   };
@@ -45,7 +62,7 @@ export function LazyLoginPrompt({ variant = "default" }: LazyLoginPromptProps) {
     const { error } = await supabase.auth.signInWithOtp({
       email: email,
       options: {
-        emailRedirectTo: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/callback`,
+        emailRedirectTo: callbackUrl,
       },
     });
     setLoading(false);

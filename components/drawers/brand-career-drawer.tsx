@@ -101,6 +101,45 @@ export function BrandCareerDrawer() {
     return { totalCompleted: raw.totalCompleted, brands: enriched };
   }, [userGigs, brandMeta]);
 
+  /** Every brand that offers cert and/or referral; user progress shown (0/N if none). Completed-work brands sort first under Axelerate. */
+  const careerPartnerDeck = useMemo(() => {
+    const countOf = (brandIdLc: string) =>
+      stats.brands.find((s) => s.brandId === brandIdLc)?.count ?? 0;
+    type Row = {
+      brandId: string;
+      brandName: string;
+      count: number;
+      internship: boolean;
+      referral: boolean;
+    };
+    const rows: Row[] = brands
+      .filter(
+        (b) =>
+          b.career_internship_proof_enabled === true ||
+          b.career_referral_enabled === true,
+      )
+      .map((b) => {
+        const brandId = b.id.toLowerCase();
+        return {
+          brandId,
+          brandName: (b.name?.trim() || "Partner brand").trim(),
+          count: countOf(brandId),
+          internship: b.career_internship_proof_enabled === true,
+          referral: b.career_referral_enabled === true,
+        };
+      });
+    rows.sort((a, b) => {
+      const aHit = a.count > 0 ? 1 : 0;
+      const bHit = b.count > 0 ? 1 : 0;
+      if (aHit !== bHit) return bHit - aHit;
+      if (b.count !== a.count) return b.count - a.count;
+      return a.brandName.localeCompare(b.brandName, undefined, {
+        sensitivity: "base",
+      });
+    });
+    return rows;
+  }, [brands, stats.brands]);
+
   const reloadRows = useCallback(async () => {
     if (!user?.id) {
       setRowsByKey(new Map());
@@ -353,17 +392,15 @@ export function BrandCareerDrawer() {
           </div>
         </article>
 
-        {stats.brands.length === 0 ? (
+        {careerPartnerDeck.length === 0 ? (
           <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground dark:border-white/15">
-            No brand stats yet — complete a gig to populate your lanes.
+            No partner offers internship certificate or internal referral lanes yet —
+            check back as we onboard brands.
           </p>
         ) : (
-          stats.brands.map((b) => {
-            const meta = brandMeta.get(b.brandId.toLowerCase());
-            const showCert = meta?.internship === true;
-            const showRef = meta?.referral === true;
-            if (!showCert && !showRef) return null;
-
+          careerPartnerDeck.map((b) => {
+            const showCert = b.internship;
+            const showRef = b.referral;
             const certK = brandCertRewardKey(b.brandId);
             const refK = brandReferralRewardKey(b.brandId);
             const unlocked = b.count >= CAREER_BRAND_THRESHOLD;
@@ -371,11 +408,17 @@ export function BrandCareerDrawer() {
             const refRow = rowsByKey.get(refK);
             const certPhase = showCert ? phaseFor(certRow, unlocked) : "locked";
             const refPhase = showRef ? phaseFor(refRow, unlocked) : "locked";
+            const hasWorkHere = b.count > 0;
 
             return (
               <div key={b.brandId} className="space-y-3">
                 <p className="px-1 font-mono text-[10px] font-bold uppercase tracking-widest text-brand-primary/90">
                   {b.brandName}
+                  {hasWorkHere ? (
+                    <span className="ml-1.5 rounded border border-brand-primary/40 bg-brand-primary/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-brand-primary">
+                      Your gigs
+                    </span>
+                  ) : null}
                   <span className="ml-2 text-muted-foreground">
                     · {b.count}/{CAREER_BRAND_THRESHOLD} finished
                   </span>

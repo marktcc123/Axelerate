@@ -11,13 +11,15 @@ import {
   ChevronRight,
   Loader2,
   Ban,
+  Gift,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, copyTextToClipboard } from "@/lib/utils";
 import { useAppDataContext } from "@/lib/context/app-data-context";
 import type { Order, Product, OrderItemRaw } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { OrderLifecycleActions } from "@/components/order-lifecycle-actions";
+import { createClient } from "@/lib/supabase/client";
 
 const DIGITAL_CATEGORIES = ["tech", "gaming", "Tech", "Gaming"];
 
@@ -210,11 +212,15 @@ function OrderCard({
   products,
   onRevealCode,
   onOrdersMutated,
+  giftOutbound,
+  isGiftRedemption,
 }: {
   order: Order;
   products: Product[];
   onRevealCode: (orderId: string, code: string) => void;
   onOrdersMutated?: () => void;
+  giftOutbound?: { token: string; claimed_at: string | null };
+  isGiftRedemption?: boolean;
 }) {
   const resolved = resolveOrderItems(order, products);
   // 空订单或无法解析时，默认视为实体订单，强制显示物流进度条（避免 [].every() 导致 allDigital=true 隐藏）
@@ -281,15 +287,69 @@ function OrderCard({
               Cancel declined
             </span>
           )}
+          {giftOutbound && (
+            <span className="inline-flex items-center gap-1 rounded-md border border-fuchsia-500/45 bg-fuchsia-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-fuchsia-700 dark:text-fuchsia-200">
+              <Gift className="h-3 w-3 shrink-0" aria-hidden />
+              Gift link {giftOutbound.claimed_at ? "· claimed" : "· pending"}
+            </span>
+          )}
+          {isGiftRedemption ? (
+            <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/45 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-emerald-700 dark:text-emerald-200">
+              Gift redeemed
+            </span>
+          ) : null}
         </div>
         <div className="mb-3 flex items-center justify-between">
           <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
             Order #{order.id.slice(0, 8)}
           </span>
           <span className="text-xs font-bold text-foreground">
-            ${Number(order.cash_paid ?? order.total_amount).toFixed(2)}
+            {isGiftRedemption ?
+              `$0.00`
+            : `$${Number(order.cash_paid ?? order.total_amount).toFixed(2)}`}
           </span>
         </div>
+
+        {giftOutbound ?
+          <div className="mb-3 rounded-xl border border-fuchsia-500/25 bg-fuchsia-500/5 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-fuchsia-800 dark:text-fuchsia-200">
+              Friend checks out via link (no duplicate charge).
+            </div>
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2 py-2 dark:border-white/10">
+              <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-foreground">
+                {typeof window !== "undefined" ?
+                  `${window.location.origin}/gift/${encodeURIComponent(giftOutbound.token)}`
+                : `/gift/${giftOutbound.token}`}
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  const url =
+                    typeof window !== "undefined"
+                      ? `${window.location.origin}/gift/${encodeURIComponent(giftOutbound.token)}`
+                      : "";
+                  const ok = await copyTextToClipboard(url);
+                  if (ok) toast.success("Gift link copied");
+                  else {
+                    toast.error(
+                      "Copy blocked — paste manually or enable clipboard permission (HTTPS).",
+                    );
+                  }
+                }}
+                className="flex shrink-0 items-center gap-1 rounded-lg border border-fuchsia-500/40 bg-fuchsia-500/15 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-fuchsia-900 dark:text-fuchsia-100"
+              >
+                <Copy className="h-3 w-3" aria-hidden />
+                Copy
+              </button>
+            </div>
+          </div>
+        : null}
+
+        {isGiftRedemption ?
+          <p className="mb-3 text-[11px] font-semibold leading-snug text-emerald-700 dark:text-emerald-300">
+            Paid by your Axelerate friend — this $0 fulfillment order is tied to their gift checkout.
+          </p>
+        : null}
 
         <OrderTrackingTimeline order={order} isPhysical={isPhysical} />
 
@@ -401,6 +461,14 @@ export function MyOrdersDrawer({
   const { user, orders, publicProducts, isLoadingPrivate, refetchPrivate } =
     useAppDataContext();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [giftOutboundByPurchase, setGiftOutboundByPurchase] = useState<
+    Map<string, { token: string; claimed_at: string | null }>
+  >(() => new Map());
+  const [giftInboundOrderIds, setGiftInboundOrderIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const orderIdsKey = orders.map((o) => o.id).join("|");
 
   useEffect(() => {
     if ((open ?? true) && user?.id) {
@@ -410,6 +478,51 @@ export function MyOrdersDrawer({
         .catch(() => setIsRefreshing(false));
     }
   }, [open, user?.id, refetchPrivate]);
+
+  useEffect(() => {
+    if (!user?.id || orders.length === 0) {
+      setGiftOutboundByPurchase(new Map());
+      setGiftInboundOrderIds(new Set());
+      return;
+    }
+
+    const supabase = createClient();
+    const ids = orders.map((o) => o.id);
+    let cancelled = false;
+
+    void (async () => {
+      const [outRes, inRes] = await Promise.all([
+        supabase.from("gift_claims").select("purchaser_order_id, token, claimed_at").in("purchaser_order_id", ids),
+        supabase.from("gift_claims").select("recipient_order_id").in("recipient_order_id", ids),
+      ]);
+
+      if (cancelled) return;
+
+      const nextOut = new Map<string, { token: string; claimed_at: string | null }>();
+      for (const row of (outRes.data ?? []) as {
+        purchaser_order_id: string;
+        token: string;
+        claimed_at: string | null;
+      }[]) {
+        nextOut.set(row.purchaser_order_id, {
+          token: row.token,
+          claimed_at: row.claimed_at,
+        });
+      }
+
+      const nextIn = new Set<string>();
+      for (const row of (inRes.data ?? []) as { recipient_order_id: string | null }[]) {
+        if (row.recipient_order_id) nextIn.add(row.recipient_order_id);
+      }
+
+      setGiftOutboundByPurchase(nextOut);
+      setGiftInboundOrderIds(nextIn);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, orders.length, orderIdsKey]);
 
   const handleRevealCode = (orderId: string, code: string) => {
     toast.success("Code revealed! Save it somewhere safe.");
@@ -463,6 +576,8 @@ export function MyOrdersDrawer({
           order={order}
           products={publicProducts}
           onRevealCode={handleRevealCode}
+          giftOutbound={giftOutboundByPurchase.get(order.id)}
+          isGiftRedemption={giftInboundOrderIds.has(order.id)}
           onOrdersMutated={() => void refetchPrivate({ silent: true })}
         />
       ))}
