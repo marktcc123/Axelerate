@@ -57,9 +57,15 @@ import { useCartStore } from "@/store/cart-store";
 import { getUnitPriceUsd, parseProductSpecifications } from "@/lib/shopify/product-specifications";
 import { createClient } from "@/lib/supabase/client";
 import { useSearchParams, useRouter } from "next/navigation";
+import {
+  SHOP_TOPIC_ALL,
+  humanizeShopTopicSlug,
+  shopTopicTabClassNames,
+} from "@/lib/shop-topics";
 
-const CATEGORIES = ["All", "Beauty", "Food", "Apparel", "Drops"] as const;
-type CategoryTab = (typeof CATEGORIES)[number];
+/** Filters 内「Product category」：all + 可选 Drops + 来自数据的 category */
+const PRODUCT_CATEGORY_ALL = "all";
+const PRODUCT_CATEGORY_DROPS = "__drops__";
 
 /** After migration 00035, driven by DB column; before migration, falls back to is_drop / drop_time. */
 function productShowsInFridayNightBanner(p: Product): boolean {
@@ -1027,6 +1033,9 @@ function FilterChipGroup<T extends string>({
 function ShopFiltersDrawer({
   open,
   onOpenChange,
+  categoryChipOptions,
+  productCategory,
+  onProductCategoryChange,
   brandOptions,
   selectedBrandIds,
   onToggleBrand,
@@ -1043,6 +1052,9 @@ function ShopFiltersDrawer({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  categoryChipOptions: { value: string; label: string }[];
+  productCategory: string;
+  onProductCategoryChange: (v: string) => void;
   brandOptions: { id: string; name: string }[];
   selectedBrandIds: string[];
   onToggleBrand: (id: string) => void;
@@ -1088,6 +1100,25 @@ function ShopFiltersDrawer({
           </div>
 
           <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1 scrollbar-visible">
+            <section>
+              <h3 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                Product category
+              </h3>
+              <FilterChipGroup
+                value={productCategory}
+                onChange={onProductCategoryChange}
+                options={categoryChipOptions}
+              />
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                Categories are taken from each product&apos;s{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[9px]">
+                  category
+                </code>{" "}
+                field in your catalog; only values that appear on at least one
+                product are listed.
+              </p>
+            </section>
+
             <section>
               <h3 className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                 Brand
@@ -1205,7 +1236,8 @@ function ShopFiltersDrawer({
 export function PerksShop() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [selectedCategory, setSelectedCategory] = useState<CategoryTab>("All");
+  const [selectedTopic, setSelectedTopic] = useState(SHOP_TOPIC_ALL);
+  const [productCategory, setProductCategory] = useState(PRODUCT_CATEGORY_ALL);
   const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const [selectedBrandIds, setSelectedBrandIds] = useState<string[]>([]);
   const [availability, setAvailability] = useState<AvailabilityFilter>("all");
@@ -1264,13 +1296,71 @@ export function PerksShop() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [publicProducts]);
 
+  const productCategoryChipOptions = useMemo(() => {
+    const out: { value: string; label: string }[] = [
+      { value: PRODUCT_CATEGORY_ALL, label: "All" },
+    ];
+    const hasDrops = publicProducts.some(
+      (p) => p.is_drop === true || p.drop_time != null
+    );
+    if (hasDrops) {
+      out.push({ value: PRODUCT_CATEGORY_DROPS, label: "Drops" });
+    }
+    const seen = new Set<string>();
+    const fromDb: { value: string; label: string }[] = [];
+    for (const p of publicProducts) {
+      const raw = (p.category ?? "").trim();
+      if (!raw) continue;
+      const k = raw.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      fromDb.push({ value: raw, label: raw });
+    }
+    fromDb.sort((a, b) => a.label.localeCompare(b.label));
+    return [...out, ...fromDb];
+  }, [publicProducts]);
+
+  useEffect(() => {
+    const allowed = new Set(productCategoryChipOptions.map((o) => o.value));
+    if (!allowed.has(productCategory)) {
+      setProductCategory(PRODUCT_CATEGORY_ALL);
+    }
+  }, [productCategoryChipOptions, productCategory]);
+
+  const topicTabOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const fromDb: { slug: string; label: string }[] = [];
+    for (const p of publicProducts) {
+      const raw = (p.shop_topic_slug ?? "").trim();
+      if (!raw) continue;
+      const key = raw.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fromDb.push({ slug: key, label: humanizeShopTopicSlug(raw) });
+    }
+    fromDb.sort((a, b) => a.label.localeCompare(b.label));
+    return [{ slug: SHOP_TOPIC_ALL, label: "All" }, ...fromDb];
+  }, [publicProducts]);
+
+  useEffect(() => {
+    const allowed = new Set(topicTabOptions.map((t) => t.slug));
+    if (!allowed.has(selectedTopic)) {
+      setSelectedTopic(SHOP_TOPIC_ALL);
+    }
+  }, [topicTabOptions, selectedTopic]);
+
   const filteredProducts = useMemo(() => {
     return publicProducts.filter((p) => {
-      if (selectedCategory === "Drops") {
+      if (selectedTopic !== SHOP_TOPIC_ALL) {
+        const rowSlug = (p.shop_topic_slug ?? "").trim().toLowerCase();
+        if (rowSlug !== selectedTopic.toLowerCase()) return false;
+      }
+
+      if (productCategory === PRODUCT_CATEGORY_DROPS) {
         if (!(p.is_drop === true || p.drop_time != null)) return false;
-      } else if (selectedCategory !== "All") {
-        const cat = (p.category ?? "Beauty").toLowerCase();
-        if (cat !== selectedCategory.toLowerCase()) return false;
+      } else if (productCategory !== PRODUCT_CATEGORY_ALL) {
+        const cat = (p.category ?? "").trim();
+        if (cat.toLowerCase() !== productCategory.toLowerCase()) return false;
       }
 
       if (selectedBrandIds.length > 0 && !selectedBrandIds.includes(p.brand_id)) {
@@ -1296,7 +1386,8 @@ export function PerksShop() {
     });
   }, [
     publicProducts,
-    selectedCategory,
+    selectedTopic,
+    productCategory,
     selectedBrandIds,
     availability,
     tierAccess,
@@ -1306,14 +1397,22 @@ export function PerksShop() {
 
   const activeFilterCount = useMemo(() => {
     let n = 0;
+    if (productCategory !== PRODUCT_CATEGORY_ALL) n += 1;
     if (selectedBrandIds.length > 0) n += 1;
     if (availability !== "all") n += 1;
     if (tierAccess !== "all") n += 1;
     if (featuredOnly) n += 1;
     return n;
-  }, [selectedBrandIds.length, availability, tierAccess, featuredOnly]);
+  }, [
+    productCategory,
+    selectedBrandIds.length,
+    availability,
+    tierAccess,
+    featuredOnly,
+  ]);
 
   const resetShopFilters = useCallback(() => {
+    setProductCategory(PRODUCT_CATEGORY_ALL);
     setSelectedBrandIds([]);
     setAvailability("all");
     setTierAccess("all");
@@ -1398,24 +1497,22 @@ export function PerksShop() {
         userTier={userTier}
       />
 
-      <div className="-mx-5 mb-5 overflow-x-auto px-5 scrollbar-none">
-        <div className="flex gap-2">
-          {CATEGORIES.map((cat) => (
+      <div className="-mx-5 mb-5 overflow-x-auto px-5 py-2 scrollbar-none">
+        <p className="mb-3 font-mono text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+          Topics
+        </p>
+        <div className="flex gap-4 px-1 sm:gap-5">
+          {topicTabOptions.map((tab) => (
             <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={cn(
-                "flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all",
-                selectedCategory === cat
-                  ? "border-2 border-border bg-brand-primary text-white shadow-sm"
-                  : "border-2 border-transparent bg-muted/60 text-muted-foreground hover:bg-muted dark:bg-white/5 dark:hover:bg-white/10",
-                cat === "Drops" &&
-                  selectedCategory !== cat &&
-                  "border border-brand-primary/30 text-brand-primary"
+              key={tab.slug}
+              type="button"
+              onClick={() => setSelectedTopic(tab.slug)}
+              className={shopTopicTabClassNames(
+                tab.slug,
+                selectedTopic === tab.slug
               )}
             >
-              {cat === "Drops" && <Flame className="h-3 w-3" />}
-              {cat}
+              {tab.label}
             </button>
           ))}
         </div>
@@ -1448,6 +1545,9 @@ export function PerksShop() {
       <ShopFiltersDrawer
         open={filterDrawerOpen}
         onOpenChange={setFilterDrawerOpen}
+        categoryChipOptions={productCategoryChipOptions}
+        productCategory={productCategory}
+        onProductCategoryChange={setProductCategory}
         brandOptions={brandOptions}
         selectedBrandIds={selectedBrandIds}
         onToggleBrand={toggleBrandFilter}
@@ -1676,8 +1776,8 @@ export function PerksShop() {
           <p className="text-sm font-bold text-foreground dark:text-white">No items here</p>
           <p className="mt-1 max-w-xs text-xs text-muted-foreground">
             {activeFilterCount > 0
-              ? "Nothing matches these filters. Try resetting or broadening brand / tier / stock filters."
-              : "Check back later for new drops"}
+              ? "Nothing matches these filters. Try resetting or broadening category / brand / tier / stock filters."
+              : "Nothing here yet."}
           </p>
           {activeFilterCount > 0 && (
             <button

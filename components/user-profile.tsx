@@ -58,7 +58,7 @@ const MENU_SECTIONS: { title: string; items: MenuRow[] }[] = [
   {
     title: "Grow & earn",
     items: [
-      { key: "verification", label: "Verification", icon: ShieldCheck },
+      { key: "verification", label: "Syndicate Access", icon: ShieldCheck },
       { key: "elite", label: "Elite Tracks", icon: Zap },
       { key: "ugc", label: "Brand Co-Creations", icon: Video },
       { key: "events", label: "My Events", icon: CalendarDays },

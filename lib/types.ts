@@ -60,6 +60,8 @@ export interface Product {
   discount_price: number | null;
   drop_time: string | null;
   category?: string | null;
+  /** Perks Shop 顶栏专题：存于 `shop_topic_slug`，与当前目录中出现的 slug 一致；NULL 仅出现在「All」下 */
+  shop_topic_slug?: string | null;
   is_drop?: boolean;
   /** Supabase: show in Perks Shop Friday Night Drop banner (carousel); countdown uses this row's drop_time */
   show_in_friday_night_drop?: boolean;
@@ -136,7 +138,9 @@ export interface Gig {
 // PRIVATE TYPES (登录用户可见)
 // =============================================================================
 
-/** 10 个验证步骤 (HFC 风格) */
+/**
+ * Profiles 持久化的 10 个布尔闸门；产品在「Syndicate Access」抽屉聚合成 6 个 Access Missions UI。
+ */
 export interface VerificationSteps {
   has_avatar: boolean;
   has_resume: boolean;

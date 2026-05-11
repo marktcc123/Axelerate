@@ -131,7 +131,7 @@ function validateVerificationPayload(
   }
 }
 
-/** Sync verification_steps JSON + physical columns; when all 10 steps are done and tier is guest → student (Insider). */
+/** Sync verification_steps JSON + physical columns; all keys true ⇒ missions complete ⇒ guest tier can promote to student (Insider). */
 export async function syncVerificationStep(
   userId: string,
   stepKey: keyof VerificationSteps,
@@ -257,4 +257,60 @@ export async function syncVerificationStep(
 
   revalidatePath("/");
   return { success: true, tierUpgraded };
+}
+
+export type ResetSyndicateVerificationResult =
+  | { success: true }
+  | { success: false; error: string };
+
+/**
+ * 重置任务勾选：`verification_steps` 全部归零。不清空已填字段，展开任务仍可看到并修改。
+ * tier 为 student 时降回 guest（与仅通过验证解锁的 Insider 一致）。
+ */
+export async function resetSyndicateVerificationProgress(
+  userId: string,
+): Promise<ResetSyndicateVerificationResult> {
+  if (!userId?.trim()) return { success: false, error: "User ID required" };
+
+  const supabase = await createClient();
+  const {
+    data: { user: authUser },
+  } = await supabase.auth.getUser();
+
+  if (!authUser?.id || authUser.id !== userId) {
+    return { success: false, error: "You must be signed in." };
+  }
+
+  const { data: profile, error: fetchError } = await supabase
+    .from("profiles")
+    .select("tier")
+    .eq("id", userId)
+    .single();
+
+  if (fetchError || !profile) {
+    return { success: false, error: fetchError?.message ?? "Profile not found" };
+  }
+
+  const tier = resolveTierKey(String(profile.tier ?? "guest"));
+  const updatePayload: Record<string, unknown> = {
+    verification_steps: DEFAULT_VERIFICATION_STEPS,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (tier === "student") {
+    updatePayload.tier = "guest";
+  }
+
+  const { error: updateError } = await supabase
+    .from("profiles")
+    .update(updatePayload)
+    .eq("id", userId);
+
+  if (updateError) {
+    console.error("[resetSyndicateVerificationProgress]", updateError);
+    return { success: false, error: updateError.message };
+  }
+
+  revalidatePath("/");
+  return { success: true };
 }
