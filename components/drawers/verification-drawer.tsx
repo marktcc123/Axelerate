@@ -143,7 +143,7 @@ export function VerificationDrawer() {
     if (!user?.id) return false;
     setSavingStep(stepKey);
     try {
-      const result = await syncVerificationStep(user.id, stepKey, payload);
+      const result = await syncVerificationStep(stepKey, payload);
       if (result.success) {
         toast.success(
           result.tierUpgraded
@@ -167,7 +167,7 @@ export function VerificationDrawer() {
     if (!user?.id) return;
     setResetting(true);
     try {
-      const result = await resetSyndicateVerificationProgress(user.id);
+      const result = await resetSyndicateVerificationProgress();
       if (result.success) {
         toast.success(
           "Progress cleared. Your answers are still here — expand each mission to edit & save again.",
@@ -189,7 +189,7 @@ export function VerificationDrawer() {
     if (!user?.id) return;
     setSavingStep("added_portfolio");
     try {
-      const r1 = await syncVerificationStep(user.id, "added_portfolio", {
+      const r1 = await syncVerificationStep("added_portfolio", {
         portfolio_url: url,
       });
       if (!r1.success) {
@@ -197,7 +197,7 @@ export function VerificationDrawer() {
         return;
       }
       setSavingStep("has_resume");
-      const r2 = await syncVerificationStep(user.id, "has_resume", {
+      const r2 = await syncVerificationStep("has_resume", {
         resume_url: url,
       });
       if (!r2.success) {
@@ -807,16 +807,13 @@ function looksLikeEmail(s: string) {
  * Project Settings → Authentication: **Site URL** + **Redirect URLs** for your
  * app (`https://your-domain...`) so redirects from email/SMS flows are allowed.
  *
- * **Production nuance**: `signInWithOtp({ phone })` is primarily a **sign-in**
- * funnel. Linking SMS to an **already logged-in email user** may create or switch
- * sessions; Gotrue also exposes `auth.updateUser({ phone })` + `verifyOtp`
- * `{ type: "phone_change" }` for phone updates — consider that for linking.
- *
+ * **Logged-in phone link (this UI)**: use `auth.updateUser({ phone })` + `verifyOtp`
+ * `{ type: "phone_change" }` so the **same** Auth user / `profiles.id` is preserved.
+ * Do **not** use `signInWithOtp({ phone })` here — it can create a second user and
+ * break `syncVerificationStep` (session no longer matches your profile row).
  * API error **"Unsupported phone provider"** → GoTrue has no usable SMS gateway.
- * Hosted: Dashboard → Authentication → Providers → Phone must be ON **and**
- * credentials filled (Twilio / Vonage / Textlocal). Until then every
- * `signInWithOtp({ phone })` fails with that message — it is not the UI or the
- * digits you typed.
+ * Dashboard: Phone ON + valid Twilio/Vonage credentials required for `updateUser({ phone })`
+ * to send OTP — independent of the digits you typed.
  */
 
 /** Map GoTrue SMS errors to a toast line + full inline copy (link in banner). */
@@ -953,18 +950,12 @@ function PhoneVerificationForm({
       );
       return;
     }
-    setBusy(true);
-    setErr(null);
     /*
-     * Requires: Auth → Phone enabled + Twilio. Optional `shouldCreateUser` if new users OK.
-     *
-     * Note: calling `signInWithOtp({ phone })` while already signed in may swap sessions.
-     * For production linking, prefer `supabase.auth.updateUser({ phone: e164 })` +
-     * `verifyOtp` `{ type: "phone_change" }`.
+     * Logged-in users: `updateUser({ phone })` sends OTP and keeps the same user id.
+     * Verify with type `phone_change` — not `sms` (that pairs with `signInWithOtp`).
      */
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await supabase.auth.updateUser({
       phone: target.e164,
-      options: { shouldCreateUser: true },
     });
     setBusy(false);
     if (error) {
@@ -995,7 +986,7 @@ function PhoneVerificationForm({
     const { error } = await supabase.auth.verifyOtp({
       phone: pendingE164,
       token: otp.trim(),
-      type: "sms",
+      type: "phone_change",
     });
     if (error) {
       setBusy(false);
@@ -1015,8 +1006,8 @@ function PhoneVerificationForm({
       <div className="space-y-3">
         <p className="text-xs leading-relaxed text-muted-foreground">
           This number passed SMS OTP and was saved on your Syndicate profile (Supabase{" "}
-          <span className="font-mono">verifyOtp</span>, type <span className="font-mono">sms</span>
-          ).
+          <span className="font-mono">verifyOtp</span>, type{" "}
+          <span className="font-mono">phone_change</span>).
         </p>
         <div className="flex items-center gap-2 rounded-xl border-2 border-emerald-500/50 bg-black px-4 py-3 shadow-[3px_3px_0_rgb(16_185_129/0.35)]">
           <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" aria-hidden />

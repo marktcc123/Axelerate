@@ -133,20 +133,19 @@ function validateVerificationPayload(
 
 /** Sync verification_steps JSON + physical columns; all keys true ⇒ missions complete ⇒ guest tier can promote to student (Insider). */
 export async function syncVerificationStep(
-  userId: string,
   stepKey: keyof VerificationSteps,
   payload: Record<string, unknown>,
 ): Promise<SyncVerificationResult> {
-  if (!userId?.trim()) return { success: false, error: "User ID required" };
-
   const supabase = await createClient();
   const {
     data: { user: authUser },
   } = await supabase.auth.getUser();
 
-  if (!authUser?.id || authUser.id !== userId) {
+  if (!authUser?.id) {
     return { success: false, error: "You must be signed in to save this step." };
   }
+
+  const userId = authUser.id;
 
   if (stepKey === "email_verified") {
     if (!authUser.email_confirmed_at) {
@@ -267,19 +266,17 @@ export type ResetSyndicateVerificationResult =
  * 重置任务勾选：`verification_steps` 全部归零。不清空已填字段，展开任务仍可看到并修改。
  * tier 为 student 时降回 guest（与仅通过验证解锁的 Insider 一致）。
  */
-export async function resetSyndicateVerificationProgress(
-  userId: string,
-): Promise<ResetSyndicateVerificationResult> {
-  if (!userId?.trim()) return { success: false, error: "User ID required" };
-
+export async function resetSyndicateVerificationProgress(): Promise<ResetSyndicateVerificationResult> {
   const supabase = await createClient();
   const {
     data: { user: authUser },
   } = await supabase.auth.getUser();
 
-  if (!authUser?.id || authUser.id !== userId) {
+  if (!authUser?.id) {
     return { success: false, error: "You must be signed in." };
   }
+
+  const userId = authUser.id;
 
   const { data: profile, error: fetchError } = await supabase
     .from("profiles")
