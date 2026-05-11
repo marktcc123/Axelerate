@@ -45,7 +45,7 @@ type AccessMissionId =
   | "creator_persona"
   | "clout"
   | "algorithm_sync"
-  | "vibe_check";
+  | "hitlist";
 
 const ACCESS_MISSIONS: {
   id: AccessMissionId;
@@ -89,10 +89,10 @@ const ACCESS_MISSIONS: {
     subSteps: ["followed_brands"],
   },
   {
-    id: "vibe_check",
-    title: "Mission 6: The Vibe Check",
+    id: "hitlist",
+    title: "Mission 6: The Hitlist",
     subtitle:
-      "Drop a link to your best piece of content or a 15-second intro video.",
+      "Drop 1 brand or product you want us to unlock next.",
     subSteps: ["answered_questions"],
   },
 ];
@@ -708,9 +708,11 @@ function StepFormContent({
       );
     case "answered_questions":
       return (
-        <InterviewAnswersForm
-          defaultValue={profile?.interview_answers ?? ""}
-          onSave={(text) => onSave("answered_questions", { interview_answers: text })}
+        <HitlistBrandForm
+          defaultValue={profile?.hitlist_brand ?? ""}
+          onSave={(brand) =>
+            onSave("answered_questions", { hitlist_brand: brand })
+          }
           saving={saving}
         />
       );
@@ -1360,48 +1362,44 @@ function FollowedBrandsForm({
   );
 }
 
-function InterviewAnswersForm({
+function HitlistBrandForm({
   defaultValue,
   onSave,
   saving,
 }: {
   defaultValue: string;
-  onSave: (text: string) => void;
+  onSave: (brandName: string) => void;
   saving: boolean;
 }) {
-  const [text, setText] = useState(defaultValue);
+  const [value, setValue] = useState(defaultValue.trim());
   useEffect(() => {
-    setText(defaultValue);
+    setValue(defaultValue.trim());
   }, [defaultValue]);
 
-  const len = text.trim().length;
-  const min = 60;
+  const t = value.trim();
+  const ok = t.length >= 2 && t.length <= 200;
 
   return (
     <div className="space-y-3">
       <p className="text-xs leading-relaxed text-muted-foreground">
-        Vibe Check: paste a link to your best clip, campaign, or a 15s intro. Add a short note on
-        why it hits (min {min} characters total).
+        One line is enough — we prioritize unlocks that repeat across syndicate intel.
       </p>
-      <textarea
-        rows={6}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="Link: … + why it slaps…"
-        className={cn(BASE_INPUT, "min-h-[140px] resize-y")}
+      <input
+        type="text"
+        autoComplete="off"
+        placeholder="e.g., Glossier, DJI, Teenage Engineering..."
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className={BASE_INPUT}
       />
-      <p className="text-[11px] text-muted-foreground">
-        {len}/{min} characters
-        {len < min ? " — keep typing" : " — ready"}
-      </p>
       <button
         type="button"
-        onClick={() => onSave(text)}
-        disabled={saving || len < min}
+        onClick={() => onSave(t)}
+        disabled={saving || !ok}
         className={BASE_BTN}
       >
-        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-        Submit vibe reel
+        {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+        Save hit — Mission 6
       </button>
     </div>
   );

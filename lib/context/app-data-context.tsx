@@ -4,6 +4,7 @@ import { createContext, useContext, useState } from "react";
 import { useAppData } from "@/lib/hooks/useAppData";
 import type { UseAppDataReturn } from "@/lib/hooks/useAppData";
 import { TierUpgradeCelebration } from "@/components/tier-upgrade-celebration";
+import { IntelBountyOpportunity } from "@/components/intel-bounty-modal";
 
 export type AppDataContextValue = UseAppDataReturn & {
   previewAppTheme: string | null;
@@ -19,6 +20,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     <AppDataContext.Provider value={{ ...data, previewAppTheme, setPreviewAppTheme }}>
       {children}
       <TierUpgradeCelebration />
+      <IntelBountyOpportunity />
     </AppDataContext.Provider>
   );
 }

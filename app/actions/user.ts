@@ -118,10 +118,9 @@ function validateVerificationPayload(
       return null;
     }
     case "answered_questions": {
-      const t = String(payload.interview_answers ?? "").trim();
-      if (t.length < 60) {
-        return "Please write at least 60 characters (about three short answers).";
-      }
+      const t = String(payload.hitlist_brand ?? "").trim();
+      if (t.length < 2) return "Enter at least 2 characters.";
+      if (t.length > 200) return "Keep it under 200 characters.";
       return null;
     }
     case "email_verified":
@@ -163,7 +162,7 @@ export async function syncVerificationStep(
   const { data: profile, error: fetchError } = await supabase
     .from("profiles")
     .select(
-      "verification_steps, avatar_url, campus, graduation_year, skills, interests, resume_url, portfolio_url, tier, phone, followed_brands_list, interview_answers",
+      "verification_steps, avatar_url, campus, graduation_year, skills, interests, resume_url, portfolio_url, tier, phone, followed_brands_list, interview_answers, hitlist_brand, consumer_intel, intel_bounty_skipped_at, intel_bounty_claimed_at",
     )
     .eq("id", userId)
     .single();
@@ -174,12 +173,15 @@ export async function syncVerificationStep(
       msg.includes("phone") ||
       msg.includes("followed_brands_list") ||
       msg.includes("interview_answers") ||
+      msg.includes("hitlist_brand") ||
+      msg.includes("consumer_intel") ||
+      msg.includes("intel_bounty") ||
       fetchError?.code === "42703"
     ) {
       return {
         success: false,
         error:
-          "Run migration 00033_profiles_verification_extras.sql in Supabase (adds phone & text fields), then try again.",
+        "Run migration 00033 / 00046 in Supabase (profile columns), then try again.",
       };
     }
     console.error("[syncVerificationStep] fetch error:", fetchError);
@@ -218,8 +220,8 @@ export async function syncVerificationStep(
     updatePayload.phone = digits;
   } else if (stepKey === "followed_brands" && payload.followed_brands_list != null) {
     updatePayload.followed_brands_list = String(payload.followed_brands_list).trim();
-  } else if (stepKey === "answered_questions" && payload.interview_answers != null) {
-    updatePayload.interview_answers = String(payload.interview_answers).trim();
+  } else if (stepKey === "answered_questions" && payload.hitlist_brand != null) {
+    updatePayload.hitlist_brand = String(payload.hitlist_brand).trim();
   }
 
   const mergedSteps = newSteps as VerificationSteps;
@@ -242,7 +244,10 @@ export async function syncVerificationStep(
     if (
       String(updateError.message ?? "").includes("phone") ||
       String(updateError.message ?? "").includes("followed_brands_list") ||
-      String(updateError.message ?? "").includes("interview_answers")
+      String(updateError.message ?? "").includes("interview_answers") ||
+      String(updateError.message ?? "").includes("hitlist_brand") ||
+      String(updateError.message ?? "").includes("consumer_intel") ||
+      String(updateError.message ?? "").includes("intel_bounty")
     ) {
       return {
         success: false,

@@ -190,8 +190,26 @@ export const VERIFICATION_STEP_LABELS: Record<keyof VerificationSteps, string> =
   added_interests: "Add 3 Interests to your profile",
   added_portfolio: "Add a portfolio item",
   followed_brands: "Follow 5 brands",
-  answered_questions: "Answer 3 interview questions",
+  answered_questions: "The Hitlist — one unlock request",
 };
+
+/** Mission 6 + Intel Bounty: structured survey responses stored in profiles.consumer_intel (jsonb). */
+export interface ConsumerIntel {
+  q1_monthly_budget: string;
+  q2_discovery: string;
+  q3_checkout_trigger: string;
+  q4_brand_red_flag: string;
+  /** Set server-side when saving */
+  submitted_at?: string;
+}
+
+/** True when all 10 Syndicate checklist keys are satisfied (missions complete). */
+export function syndicateVerificationComplete(
+  raw: VerificationSteps | null | undefined,
+): boolean {
+  const merged = raw ? { ...DEFAULT_VERIFICATION_STEPS, ...raw } : DEFAULT_VERIFICATION_STEPS;
+  return VERIFICATION_STEP_KEYS.every((k) => merged[k]);
+}
 
 /** profiles.shipping_address JSON（与设置页字段一致） */
 export interface ShippingAddressJson {
@@ -242,8 +260,13 @@ export interface Profile {
   phone?: string | null;
   /** verification: followed_brands (comma-separated list) */
   followed_brands_list?: string | null;
-  /** verification: answered_questions */
+  /** verification: answered_questions (Mission 6 — single brand/product request) */
+  hitlist_brand?: string | null;
   interview_answers?: string | null;
+  /** Syndicate Intel Bounty (optional, jsonb): Q1-Q4 + metadata */
+  consumer_intel?: ConsumerIntel | Record<string, unknown> | null;
+  intel_bounty_skipped_at?: string | null;
+  intel_bounty_claimed_at?: string | null;
   /** Public LinkedIn profile URL (career drawer share / open) */
   linkedin_url?: string | null;
   /** 收货地址 JSON */
