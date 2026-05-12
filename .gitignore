@@ -5,6 +5,9 @@ __v0_jsx-dev-runtime.ts
 instrumentation-client.js
 instrumentation-client.ts
 
+# TypeScript incremental cache (machine-local)
+*.tsbuildinfo
+
 # Common ignores
 node_modules/
 .next/
