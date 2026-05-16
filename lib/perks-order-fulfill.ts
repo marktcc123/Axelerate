@@ -2,6 +2,7 @@ import { revalidatePath } from "next/cache";
 import type Stripe from "stripe";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ProductRow } from "@/lib/shopify/wallet-dropship-order";
+import { insertUserWalletEvent } from "@/lib/wallet-events";
 import {
   cartLineHasResolvableShopifyVariant,
   findVariantInSpecifications,
@@ -55,6 +56,41 @@ function catalogUsdSubtotalForLines(
   return sum;
 }
 
+type ProductCashbackRow = {
+  specifications: unknown;
+  discount_price: number | null;
+  original_price: number | null;
+  stock_count?: number | null;
+  fulfillment_type?: string | null;
+  credit_cashback_percent?: number | null;
+};
+
+/** 按各行目录价 × 商品配置的返现比例，汇总应发 Pts（100 Pts = $1 USD） */
+function computePurchaseCashbackPts(
+  cartItems: CartLine[],
+  productMap: Map<string, ProductCashbackRow>
+): number {
+  let total = 0;
+  for (const item of cartItems) {
+    const product = productMap.get(item.id);
+    if (!product) continue;
+    const spec = parseProductSpecifications(product.specifications);
+    const vid =
+      resolveVariantIdForCheckout(spec, item.shopifyVariantId ?? null) ??
+      getDefaultShopifyVariantIdFromProduct(product.specifications);
+    const fallback = Number(product.discount_price ?? product.original_price ?? 0);
+    const unitUsd = vid ? getUnitPriceUsd(spec, vid, fallback) : fallback;
+    const lineUsd = unitUsd * item.quantity;
+    const rawPct = product.credit_cashback_percent;
+    const pct =
+      rawPct == null || !Number.isFinite(Number(rawPct))
+        ? 10
+        : Math.min(100, Math.max(0, Math.round(Number(rawPct))));
+    total += Math.round((lineUsd * pct) / 100 * 100);
+  }
+  return total;
+}
+
 /**
  * 扣库存、写订单、记 product_purchases（余额结账与 Stripe webhook 共用）。
  * 调用前应由各入口完成验价；此处再次查库校验库存与余额。
@@ -99,7 +135,7 @@ export async function fulfillPerksShopOrder(
   const { data: products, error: fetchError } = await supabase
     .from("products")
     .select(
-      "id, stock_count, fulfillment_type, specifications, discount_price, original_price"
+      "id, stock_count, fulfillment_type, specifications, discount_price, original_price, credit_cashback_percent"
     )
     .in("id", productIds);
 
@@ -108,7 +144,11 @@ export async function fulfillPerksShopOrder(
     return { success: false, error: "Failed to verify inventory" };
   }
 
-  const productMap = new Map(products.map((p) => [p.id, p]));
+  const productMap = new Map(
+    products.map((p) => [p.id, p as unknown as ProductCashbackRow])
+  );
+
+  const cashbackPts = computePurchaseCashbackPts(cartItems, productMap);
 
   const mirrorLines = cartItems.filter((item) => {
     const product = productMap.get(item.id);
@@ -196,7 +236,7 @@ export async function fulfillPerksShopOrder(
       .from("profiles")
       .update({
         cash_balance: cashBalance - deductCashFromBalance,
-        credit_balance: creditBalance - deductCredits,
+        credit_balance: creditBalance - deductCredits + cashbackPts,
         updated_at: new Date().toISOString(),
       })
       .eq("id", userId);
@@ -229,6 +269,7 @@ export async function fulfillPerksShopOrder(
       user_id: userId,
       cash_paid: orderCashPaid,
       credits_used: deductCredits,
+      credits_cashback_given: cashbackPts,
       status: "processing",
       items: cartItems,
     };
@@ -270,6 +311,18 @@ export async function fulfillPerksShopOrder(
           quantity: item.quantity,
         });
       }
+    }
+
+    if (cashbackPts > 0 && insertedOrder?.id) {
+      await insertUserWalletEvent(supabase, {
+        user_id: userId,
+        category: "purchase_cashback",
+        title: "Purchase cashback",
+        detail: `+${cashbackPts} Pts (Perks Shop)`,
+        credits_delta: cashbackPts,
+        ref_type: "order",
+        ref_id: insertedOrder.id,
+      });
     }
 
     if (insertedOrder?.id) {

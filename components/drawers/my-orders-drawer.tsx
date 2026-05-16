@@ -13,7 +13,7 @@ import {
   Ban,
   Gift,
 } from "lucide-react";
-import { cn, copyTextToClipboard } from "@/lib/utils";
+import { cn, copyTextToClipboard, copyTextToClipboardSync } from "@/lib/utils";
 import { useAppDataContext } from "@/lib/context/app-data-context";
 import type { Order, Product, OrderItemRaw } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -323,7 +323,16 @@ function OrderCard({
               </span>
               <button
                 type="button"
-                onClick={async () => {
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  const url =
+                    typeof window !== "undefined"
+                      ? `${window.location.origin}/gift/${encodeURIComponent(giftOutbound.token)}`
+                      : "";
+                  if (url) copyTextToClipboardSync(url);
+                }}
+                onClick={async (e) => {
+                  e.preventDefault();
                   const url =
                     typeof window !== "undefined"
                       ? `${window.location.origin}/gift/${encodeURIComponent(giftOutbound.token)}`

@@ -693,7 +693,7 @@ export async function approveCancelRequest(orderId: string): Promise<AdminAction
   const { data: order, error: fetchErr } = await admin
     .from("orders")
     .select(
-      "id, user_id, status, items, cash_paid, credits_used, cancel_request_status, cancel_request_reason"
+      "id, user_id, status, items, cash_paid, credits_used, credits_cashback_given, cancel_request_status, cancel_request_reason"
     )
     .eq("id", orderId)
     .maybeSingle();
@@ -718,6 +718,9 @@ export async function approveCancelRequest(orderId: string): Promise<AdminAction
   const items = ((order as { items?: unknown }).items ?? []) as OrderItemRaw[];
   const cashPaid = Number((order as { cash_paid?: number }).cash_paid ?? 0);
   const creditsUsed = Number((order as { credits_used?: number }).credits_used ?? 0);
+  const creditsCashbackGiven = Number(
+    (order as { credits_cashback_given?: number }).credits_cashback_given ?? 0
+  );
   const userReason = String((order as { cancel_request_reason?: string | null }).cancel_request_reason ?? "").trim();
 
   const { data: profile, error: profileErr } = await admin
@@ -733,12 +736,14 @@ export async function approveCancelRequest(orderId: string): Promise<AdminAction
   const cashBalance = Number((profile as { cash_balance?: number }).cash_balance ?? 0);
   const creditBalance = Number((profile as { credit_balance?: number }).credit_balance ?? 0);
 
-  if (cashPaid > 0 || creditsUsed > 0) {
+  const creditsRefundNet = creditsUsed - creditsCashbackGiven;
+
+  if (cashPaid > 0 || creditsUsed > 0 || creditsCashbackGiven > 0) {
     const { error: refundErr } = await admin
       .from("profiles")
       .update({
         cash_balance: cashBalance + cashPaid,
-        credit_balance: creditBalance + creditsUsed,
+        credit_balance: creditBalance + creditsRefundNet,
         updated_at: new Date().toISOString(),
       })
       .eq("id", userId);
@@ -852,7 +857,7 @@ export async function approveOrderReturn(orderId: string): Promise<AdminActionRe
   const admin = createAdminClient();
   const { data: order, error: fetchErr } = await admin
     .from("orders")
-    .select("id, user_id, status, items, cash_paid, credits_used, return_status")
+    .select("id, user_id, status, items, cash_paid, credits_used, credits_cashback_given, return_status")
     .eq("id", orderId)
     .maybeSingle();
 
@@ -871,6 +876,9 @@ export async function approveOrderReturn(orderId: string): Promise<AdminActionRe
   const items = ((order as { items?: unknown }).items ?? []) as OrderItemRaw[];
   const cashPaid = Number((order as { cash_paid?: number }).cash_paid ?? 0);
   const creditsUsed = Number((order as { credits_used?: number }).credits_used ?? 0);
+  const creditsCashbackGiven = Number(
+    (order as { credits_cashback_given?: number }).credits_cashback_given ?? 0
+  );
 
   const { data: profile, error: profileErr } = await admin
     .from("profiles")
@@ -885,12 +893,14 @@ export async function approveOrderReturn(orderId: string): Promise<AdminActionRe
   const cashBalance = Number((profile as { cash_balance?: number }).cash_balance ?? 0);
   const creditBalance = Number((profile as { credit_balance?: number }).credit_balance ?? 0);
 
-  if (cashPaid > 0 || creditsUsed > 0) {
+  const creditsRefundNet = creditsUsed - creditsCashbackGiven;
+
+  if (cashPaid > 0 || creditsUsed > 0 || creditsCashbackGiven > 0) {
     const { error: refundErr } = await admin
       .from("profiles")
       .update({
         cash_balance: cashBalance + cashPaid,
-        credit_balance: creditBalance + creditsUsed,
+        credit_balance: creditBalance + creditsRefundNet,
         updated_at: new Date().toISOString(),
       })
       .eq("id", userId);
@@ -1542,6 +1552,58 @@ export async function adminRejectCareerReward(
 
   const actorId = await getActorId();
   await insertAuditLog("career_reward", rid, "rejected_deleted", actorId);
+  revalidatePath("/");
+  return { success: true };
+}
+
+// =============================================================================
+// Perks Shop — Credits cashback % (post-purchase Pts rebate)
+// =============================================================================
+
+export type ProductCashbackAdminRow = {
+  id: string;
+  title: string;
+  credit_cashback_percent: number;
+};
+
+export async function adminListProductsCashback(): Promise<ProductCashbackAdminRow[]> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("products")
+    .select("id, title, credit_cashback_percent")
+    .order("title", { ascending: true })
+    .limit(500);
+  if (error) {
+    console.error("[adminListProductsCashback]", error);
+    return [];
+  }
+  return ((data ?? []) as ProductCashbackAdminRow[]).map((r) => ({
+    ...r,
+    credit_cashback_percent: Number(r.credit_cashback_percent ?? 10),
+  }));
+}
+
+export async function adminUpdateProductCreditCashback(
+  productId: string,
+  percent: number
+): Promise<AdminActionResult> {
+  const pid = productId?.trim();
+  if (!pid) return { success: false, error: "Product id required" };
+  const p = Math.round(Number(percent));
+  if (!Number.isFinite(p) || p < 0 || p > 100) {
+    return { success: false, error: "Percent must be 0–100." };
+  }
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("products")
+    .update({
+      credit_cashback_percent: p,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", pid);
+  if (error) return { success: false, error: error.message };
+  const actorId = await getActorId();
+  await insertAuditLog("product", pid, "credit_cashback_percent", actorId);
   revalidatePath("/");
   return { success: true };
 }

@@ -66,6 +66,8 @@ export interface Product {
   /** Supabase: show in Perks Shop Friday Night Drop banner (carousel); countdown uses this row's drop_time */
   show_in_friday_night_drop?: boolean;
   min_tier_required: UserTier;
+  /** 购买后按目录价折算的 Credits 返现比例 0–100，默认 10；0 表示关闭 */
+  credit_cashback_percent?: number;
   max_per_user: number | null;
   /** 关键功能点 (Bullet Points) */
   features?: string[] | null;
@@ -316,6 +318,8 @@ export interface Order {
   /** 实付美金，新订单使用此字段 */
   cash_paid?: number;
   credits_used?: number;
+  /** 订单完成时发放的积分返现（Pts），取消/退货批准时扣回 */
+  credits_cashback_given?: number;
   items: OrderItemRaw[];
   status: string;
   tracking_number?: string | null;

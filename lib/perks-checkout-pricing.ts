@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CartLine } from "@/lib/perks-order-fulfill";
+import { canAccessTier, resolveTierKey } from "@/lib/types";
 import {
   findVariantInSpecifications,
   getUnitPriceUsd,
@@ -32,25 +33,55 @@ export async function verifyCartAndComputeUsdDue(
   }
 
   const productIds = cartItems.map((c) => c.id);
-  const { data: products, error: fetchError } = await supabase
-    .from("products")
-    .select(
-      "id, discount_price, original_price, stock_count, specifications"
-    )
-    .in("id", productIds);
+
+  const [{ data: products, error: fetchError }, { data: profile, error: profileError }] =
+    await Promise.all([
+      supabase
+        .from("products")
+        .select(
+          "id, discount_price, original_price, stock_count, specifications, min_tier_required, credit_cashback_percent"
+        )
+        .in("id", productIds),
+      supabase
+        .from("profiles")
+        .select("credit_balance, tier")
+        .eq("id", userId)
+        .single(),
+    ]);
 
   if (fetchError || !products) {
     return { ok: false, error: "Failed to verify products" };
   }
 
+  if (profileError || !profile) {
+    return { ok: false, error: "Invalid user" };
+  }
+
   const productMap = new Map(products.map((p) => [p.id, p]));
+
+  const userTier = resolveTierKey(profile.tier);
+  const creditBalance = Number(profile.credit_balance ?? 0);
+
+  for (const item of cartItems) {
+    const row = productMap.get(item.id);
+    if (!row) {
+      return { ok: false, error: "Product not found." };
+    }
+    const requiredTier = resolveTierKey(
+      row.min_tier_required as string | undefined
+    );
+    if (!canAccessTier(userTier, requiredTier)) {
+      return {
+        ok: false,
+        error:
+          "Your current rank can't purchase one or more items in this cart — remove locked items or level up.",
+      };
+    }
+  }
 
   let totalAmount = 0;
   for (const item of cartItems) {
-    const product = productMap.get(item.id);
-    if (!product) {
-      return { ok: false, error: "Product not found." };
-    }
+    const product = productMap.get(item.id)!;
 
     const spec = parseProductSpecifications(product.specifications);
     const vid = resolveVariantIdForCheckout(spec, item.shopifyVariantId ?? null);
@@ -97,17 +128,6 @@ export async function verifyCartAndComputeUsdDue(
     totalAmount += Number(unitPrice) * item.quantity;
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("credit_balance")
-    .eq("id", userId)
-    .single();
-
-  if (profileError || !profile) {
-    return { ok: false, error: "Invalid user" };
-  }
-
-  const creditBalance = Number(profile.credit_balance ?? 0);
   const maxCreditsAllowed = Math.min(
     creditBalance,
     Math.floor(totalAmount * 100)

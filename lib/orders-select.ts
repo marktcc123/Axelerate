@@ -5,7 +5,7 @@
  * ORDERS_COLUMNS_EXTENDED：含物流与售后列；若迁移未加齐，客户端会回退到 MIN
  */
 export const ORDERS_COLUMNS_MIN =
-  "id, user_id, status, items, created_at, cash_paid, credits_used";
+  "id, user_id, status, items, created_at, cash_paid, credits_used, credits_cashback_given";
 
 export const ORDERS_COLUMNS_EXTENDED = `${ORDERS_COLUMNS_MIN}, tracking_number, cancel_reason, return_status, return_reason, cancel_request_status, cancel_request_reason, admin_rejection_message`;
 

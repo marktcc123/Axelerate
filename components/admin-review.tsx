@@ -26,6 +26,7 @@ import {
   Ban,
   User,
   Briefcase,
+  Percent,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -61,6 +62,8 @@ import {
   adminRejectCareerReward,
   adminListBrandsCareerFlags,
   adminUpdateBrandCareerFlags,
+  adminListProductsCashback,
+  adminUpdateProductCreditCashback,
   type AuditEntry,
   type PendingW9ReviewRow,
   type PendingCareerRewardRow,
@@ -101,7 +104,8 @@ type AdminTab =
   | "events"
   | "withdrawals"
   | "campuses"
-  | "career";
+  | "career"
+  | "shop";
 
 const STATUS_FILTERS = [
   "ALL",
@@ -198,6 +202,13 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
     Awaited<ReturnType<typeof adminListBrandsCareerFlags>>
   >([]);
   const [loadingCareerBrands, setLoadingCareerBrands] = useState(false);
+
+  /** Per-product credits cashback % (Perks Shop) */
+  const [cashbackRows, setCashbackRows] = useState<
+    { id: string; title: string; credit_cashback_percent: number }[]
+  >([]);
+  const [loadingCashback, setLoadingCashback] = useState(false);
+  const [cashbackSavingId, setCashbackSavingId] = useState<string | null>(null);
   const [careerApprovingId, setCareerApprovingId] = useState<string | null>(null);
   const [careerRejectingId, setCareerRejectingId] = useState<string | null>(null);
   /** English UI for file picker (OS locale otherwise shows e.g. Chinese on the native control). */
@@ -273,6 +284,14 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
     adminListBrandsCareerFlags()
       .then((rows) => setCareerBrands(rows))
       .finally(() => setLoadingCareerBrands(false));
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "shop") return;
+    setLoadingCashback(true);
+    adminListProductsCashback()
+      .then((rows) => setCashbackRows(rows))
+      .finally(() => setLoadingCashback(false));
   }, [activeTab]);
 
   useEffect(() => {
@@ -632,6 +651,19 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
         >
           <Briefcase className="h-3.5 w-3.5" />
           Career
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("shop")}
+          className={cn(
+            "flex items-center gap-2 rounded-full px-4 py-2 text-[11px] font-bold uppercase tracking-wider transition-all",
+            activeTab === "shop"
+              ? "bg-[var(--theme-primary)] text-white"
+              : "border-2 border-border bg-muted/40 text-muted-foreground dark:border-white/20 dark:bg-white/5 hover:border-[var(--theme-primary)]/50 hover:text-[var(--theme-primary)]"
+          )}
+        >
+          <Percent className="h-3.5 w-3.5" />
+          Cashback %
         </button>
       </div>
 
@@ -1964,6 +1996,88 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {activeTab === "shop" && (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            每笔 Perks 订单履约后，按商品目录价（USD）返现到买家 Credits（Pts），100 Pts = $1。比例为 0 即关闭返现。批准取消或退货时会从用户积分中扣回已发放的返现。
+          </p>
+          {loadingCashback ? (
+            <div className="flex justify-center py-16">
+              <Loader2 className="h-10 w-10 animate-spin text-[var(--theme-primary)]" />
+            </div>
+          ) : cashbackRows.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-border py-10 text-center text-sm text-muted-foreground dark:border-white/10">
+              No products found.
+            </p>
+          ) : (
+            <div className="max-h-[calc(100vh-14rem)] overflow-auto rounded-2xl border border-border bg-card dark:border-white/10">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead className="sticky top-0 z-10 border-b border-border bg-muted/95 backdrop-blur dark:border-white/10">
+                  <tr>
+                    <th className="p-3 pl-4 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                      Product
+                    </th>
+                    <th className="w-36 p-3 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                      Cashback %
+                    </th>
+                    <th className="w-28 p-3" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {cashbackRows.map((row) => (
+                    <tr
+                      key={row.id}
+                      className="border-b border-border/60 last:border-0 dark:border-white/10"
+                    >
+                      <td className="max-w-[min(100vw,28rem)] p-3 pl-4 text-foreground">{row.title}</td>
+                      <td className="p-3">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={row.credit_cashback_percent}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const n = raw === "" ? 0 : Math.min(100, Math.max(0, Math.round(Number(raw))));
+                            setCashbackRows((prev) =>
+                              prev.map((r) =>
+                                r.id === row.id ? { ...r, credit_cashback_percent: n } : r
+                              )
+                            );
+                          }}
+                          className="w-full max-w-[6rem] rounded-lg border border-border bg-background px-2 py-1.5 font-mono text-xs tabular-nums text-foreground dark:border-white/15"
+                          aria-label={`Cashback percent for ${row.title}`}
+                        />
+                      </td>
+                      <td className="p-3">
+                        <button
+                          type="button"
+                          disabled={cashbackSavingId === row.id}
+                          onClick={async () => {
+                            const pct = cashbackRows.find((r) => r.id === row.id)?.credit_cashback_percent ?? 10;
+                            setCashbackSavingId(row.id);
+                            const res = await adminUpdateProductCreditCashback(row.id, pct);
+                            setCashbackSavingId(null);
+                            if (res.success) {
+                              toast.success("Saved");
+                            } else {
+                              toast.error(res.error);
+                            }
+                          }}
+                          className="rounded-lg bg-[var(--theme-primary)] px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                        >
+                          {cashbackSavingId === row.id ? "Saving…" : "Save"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

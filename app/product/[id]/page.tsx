@@ -12,6 +12,7 @@ import { useCartStore } from "@/store/cart-store";
 import { useAppDataContext } from "@/lib/context/app-data-context";
 import { joinWaitlist } from "@/app/actions/shop";
 import { buildReviewerBadge, firstNameFromFullName } from "@/lib/schools";
+import { canAccessTier, resolveTierKey, TIER_CONFIG } from "@/lib/types";
 import { ProductVariantPicker } from "@/components/product-variant-picker";
 import {
   findVariantInSpecifications,
@@ -215,6 +216,16 @@ export default function ProductDetailPage() {
     };
   }, [reviews]);
 
+  const userTier = useMemo(
+    () => resolveTierKey(profile?.tier ?? "guest"),
+    [profile?.tier]
+  );
+
+  const tierAllowsPurchase = useMemo(() => {
+    if (!product) return true;
+    return canAccessTier(userTier, product.min_tier_required);
+  }, [product, userTier]);
+
   const images = useMemo(() => {
     const imgs = product?.images ?? [];
     if (imgs.length > 0) return imgs;
@@ -271,6 +282,12 @@ export default function ProductDetailPage() {
 
   const handleAddToCart = () => {
     if (!product) return;
+    if (!tierAllowsPurchase) {
+      toast.error("Rank requirement not met.", {
+        description: `Reach ${TIER_CONFIG[product.min_tier_required].label} to purchase.`,
+      });
+      return;
+    }
     const v =
       selectedVariantId ||
       (spec ? getPreferredDefaultVariantId(spec) : null);
@@ -406,6 +423,8 @@ export default function ProductDetailPage() {
       : Math.max(1, product.stock_count);
   const isSoldOut =
     variantInventory != null ? variantInventory <= 0 : product.stock_count <= 0;
+  const purchaseBlockedByTier =
+    Boolean(product) && !tierAllowsPurchase && !isSoldOut;
   const features = product.features ?? [];
 
   return (
@@ -595,13 +614,43 @@ export default function ProductDetailPage() {
               FREE Delivery for Axelerate Partners
             </p>
 
-            <div className="mb-4 flex max-w-sm flex-wrap items-center gap-3">
+            {purchaseBlockedByTier && (
+              <div className="mb-4 rounded-xl border border-amber-500/35 bg-amber-500/[0.08] px-4 py-3 text-sm">
+                <div className="flex gap-3">
+                  <Lock className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" aria-hidden />
+                  <div className="min-w-0">
+                    <p className="font-bold text-white">Rank locked for checkout</p>
+                    <p className="mt-1 text-zinc-400">
+                      You can view specs and Gallery. To purchase, reach{" "}
+                      <span className="font-semibold text-zinc-200">
+                        {TIER_CONFIG[product.min_tier_required].label}
+                      </span>{" "}
+                      in Perks.
+                    </p>
+                    <Link
+                      href="/?tab=shop"
+                      className="mt-2 inline-flex text-xs font-semibold text-[var(--theme-primary)] hover:underline"
+                    >
+                      Open Perks Shop
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div
+              className={cn(
+                "mb-4 flex max-w-sm flex-wrap items-center gap-3 transition-opacity",
+                purchaseBlockedByTier && "pointer-events-none opacity-40"
+              )}
+            >
               <span className="text-sm text-zinc-500">Quantity</span>
               <div className="inline-flex items-center overflow-hidden rounded-lg border border-white/10 bg-zinc-900/80">
                 <button
                   type="button"
                   onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                  className="px-3 py-2 text-zinc-400 transition-colors hover:bg-white/5 hover:text-white"
+                  disabled={purchaseBlockedByTier || isSoldOut}
+                  className="px-3 py-2 text-zinc-400 transition-colors hover:bg-white/5 hover:text-white disabled:opacity-40"
                 >
                   −
                 </button>
@@ -611,14 +660,26 @@ export default function ProductDetailPage() {
                 <button
                   type="button"
                   onClick={() => setQuantity(Math.min(maxQty, quantity + 1))}
-                  className="px-3 py-2 text-zinc-400 transition-colors hover:bg-white/5 hover:text-white"
+                  disabled={purchaseBlockedByTier || isSoldOut}
+                  className="px-3 py-2 text-zinc-400 transition-colors hover:bg-white/5 hover:text-white disabled:opacity-40"
                 >
                   +
                 </button>
               </div>
             </div>
 
-            {!isSoldOut ? (
+            {purchaseBlockedByTier ? (
+              <button
+                type="button"
+                disabled
+                className="mb-3 w-full max-w-sm cursor-not-allowed rounded-xl border border-amber-500/35 bg-zinc-900 py-3.5 text-sm font-bold uppercase tracking-wide text-zinc-400"
+              >
+                <span className="inline-flex items-center justify-center gap-2">
+                  <Lock className="h-5 w-5" aria-hidden />
+                  Locked for your rank
+                </span>
+              </button>
+            ) : !isSoldOut ? (
               <button
                 type="button"
                 onClick={handleAddToCart}

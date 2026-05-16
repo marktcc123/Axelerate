@@ -23,7 +23,7 @@ import {
   Star,
 } from "lucide-react";
 import { toast } from "sonner";
-import { cn, copyTextToClipboard } from "@/lib/utils";
+import { cn, copyTextToClipboard, copyTextToClipboardSync } from "@/lib/utils";
 import { ProductCardHoverImage } from "@/components/product-card-hover-image";
 import {
   Drawer,
@@ -1133,7 +1133,13 @@ function GiftDrawer({
                   </span>
                   <button
                     type="button"
-                    onClick={async () => {
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      const t = giftHref.trim();
+                      if (t) copyTextToClipboardSync(t);
+                    }}
+                    onClick={async (e) => {
+                      e.preventDefault();
                       const ok = await copyTextToClipboard(giftHref);
                       if (ok) toast.success("Copied");
                       else {
@@ -1539,7 +1545,7 @@ export function PerksShop() {
   }, [topicTabOptions, selectedTopic]);
 
   const filteredProducts = useMemo(() => {
-    return publicProducts.filter((p) => {
+    const list = publicProducts.filter((p) => {
       if (selectedTopic !== SHOP_TOPIC_ALL) {
         const rowSlug = (p.shop_topic_slug ?? "").trim().toLowerCase();
         if (rowSlug !== selectedTopic.toLowerCase()) return false;
@@ -1572,6 +1578,13 @@ export function PerksShop() {
       if (featuredOnly && p.is_featured !== true) return false;
 
       return true;
+    });
+
+    return [...list].sort((a, b) => {
+      const aUnlock = canAccessTier(userTier, a.min_tier_required);
+      const bUnlock = canAccessTier(userTier, b.min_tier_required);
+      if (aUnlock !== bUnlock) return aUnlock ? -1 : 1;
+      return 0;
     });
   }, [
     publicProducts,
@@ -1789,23 +1802,19 @@ export function PerksShop() {
               style={{ animationDelay: `${i * 80}ms` }}
             >
               {!accessible && (
-                <button
-                  onClick={() => {
-                    setUnlockPopupProduct(product);
-                    setUnlockDrawerOpen(true);
-                  }}
-                  className="absolute inset-0 z-10 flex items-center justify-center bg-black/70 backdrop-blur-sm transition-all hover:bg-black/60"
+                <div
+                  className="pointer-events-none absolute right-2 top-2 z-[6] flex max-w-[min(55%,16rem)] items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 shadow-sm backdrop-blur-sm dark:border-white/10"
+                  title={`Requires ${TIER_CONFIG[product.min_tier_required].label}`}
                 >
-                  <div className="flex flex-col items-center gap-1 rounded-xl border-2 border-border bg-card px-3 py-2 text-center shadow-lg dark:border-white/10 dark:bg-zinc-900/90">
-                    <Lock className="h-5 w-5 text-brand-primary" />
-                    <span className="text-[10px] font-bold text-foreground dark:text-white">
-                      Tap to Unlock
-                    </span>
-                    <span className="text-[9px] text-muted-foreground">
-                      {TIER_CONFIG[product.min_tier_required].label} required
-                    </span>
-                  </div>
-                </button>
+                  <Lock
+                    className="h-3.5 w-3.5 shrink-0 text-foreground"
+                    strokeWidth={2.25}
+                    aria-hidden
+                  />
+                  <span className="truncate font-mono text-[9px] font-black uppercase tracking-wider text-muted-foreground">
+                    {TIER_CONFIG[product.min_tier_required].label}
+                  </span>
+                </div>
               )}
 
               {isDrop && !isSoldOut && (
@@ -1905,6 +1914,18 @@ export function PerksShop() {
                 <p className="mb-2 text-[10px] text-muted-foreground">
                   {product.brand?.name ?? "—"}
                 </p>
+                {!accessible && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUnlockPopupProduct(product);
+                      setUnlockDrawerOpen(true);
+                    }}
+                    className="mb-2 text-left font-mono text-[9px] font-black uppercase tracking-wider text-brand-primary underline underline-offset-2 hover:opacity-90"
+                  >
+                    How to unlock
+                  </button>
+                )}
 
                 <div className="mb-2 flex items-baseline gap-2">
                   <span className="text-xl font-black text-brand-primary drop-shadow-[0_0_12px_rgba(var(--theme-primary-rgb),0.5)]">
