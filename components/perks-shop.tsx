@@ -68,7 +68,7 @@ import {
   shopTopicTabClassNames,
 } from "@/lib/shop-topics";
 
-/** Filters 内「Product category」：all + 可选 Drops + 来自数据的 category */
+/** Product category filter chips: All + optional Drops + categories from product data */
 const PRODUCT_CATEGORY_ALL = "all";
 const PRODUCT_CATEGORY_DROPS = "__drops__";
 
@@ -1448,7 +1448,7 @@ export function PerksShop() {
   const [unlockDrawerOpen, setUnlockDrawerOpen] = useState(false);
   const [giftModalProduct, setGiftModalProduct] = useState<Product | null>(null);
   const [giftDrawerOpen, setGiftDrawerOpen] = useState(false);
-  /** 仅当鼠标悬停在商品卡**图片区**时触发放大叠层；避免悬停标题/按钮也触发 */
+  /** Zoom overlay only when hovering the card image zone; avoids firing on title/button hover */
   const [shopCardImageHoverId, setShopCardImageHoverId] = useState<string | null>(
     null
   );

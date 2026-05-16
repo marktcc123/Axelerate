@@ -83,7 +83,7 @@ export async function createStripeCheckoutSession(
     if (!vid) {
       return {
         error:
-          "购物车含代发货商品但缺少 Shopify 变体 id。请同步商品（npm run sync:shopify-products）或仅使用纯代发车结账。",
+          "Your cart includes dropshipping items but is missing Shopify variant IDs. Sync products (`npm run sync:shopify-products`) or checkout dropshipping-only items separately.",
       };
     }
     dropshipVariantLines.push({ shopifyVariantId: vid, quantity: c.quantity });
@@ -169,10 +169,10 @@ function getStripeCheckoutShippingCountries(): Stripe.Checkout.SessionCreatePara
 }
 
 /**
- * Perks 购物车**全部为** `fulfillment_type = dropshipping` 且 Stripe 用卡支付时使用。
- * 与 `orderType: dropshipping` + `dropshipLines` 配合 `checkout.session.completed` → 写 Shopify 订单（库存/客户/地址）。
- * 变体 ID 来自 `products.specifications.shopify_variants`（需已跑 `sync:shopify-products` 或 Webhook 同步过）。
- * 本地调试：需 `stripe listen --forward-to localhost:3000/api/webhooks/stripe`，且 Dashboard 的 webhook 不会打到 localhost。
+ * Used when the whole Perks cart is `fulfillment_type = dropshipping` and Stripe card checkout is chosen.
+ * With `orderType: dropshipping` + `dropshipLines`, `checkout.session.completed` creates the Shopify order (inventory, customer, address).
+ * Variant IDs come from `products.specifications.shopify_variants` (after `sync:shopify-products` or webhook sync).
+ * Local dev: run `stripe listen --forward-to localhost:3000/api/webhooks/stripe`; Dashboard webhooks will not reach localhost.
  */
 export async function createDropshippingStripeCheckoutSession(
   cartItems: CartLine[],

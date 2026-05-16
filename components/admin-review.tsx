@@ -2002,7 +2002,7 @@ export function AdminReview({ onExitAdmin }: AdminReviewProps) {
       {activeTab === "shop" && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            每笔 Perks 订单履约后，按商品目录价（USD）返现到买家 Credits（Pts），100 Pts = $1。比例为 0 即关闭返现。批准取消或退货时会从用户积分中扣回已发放的返现。
+            After each Perks order fulfills, buyers receive Credits (Pts) as a % of catalog USD (100 Pts = $1). Set 0% to disable. Approved cancellations or returns claw back any cashback already granted.
           </p>
           {loadingCashback ? (
             <div className="flex justify-center py-16">

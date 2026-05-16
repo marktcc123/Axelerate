@@ -318,7 +318,7 @@ async function handleDropshippingSession(
   const billingAddress = mapStripeBillingToShopify(session);
   if (!shippingAddress) {
     console.warn(
-      "[stripe webhook] dropshipping: no shipping/billing address on session; Spocket 可能需地址",
+      "[stripe webhook] dropshipping: no shipping/billing address on session; Spocket may need an address",
       sessionId
     );
   }

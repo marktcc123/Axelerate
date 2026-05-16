@@ -22,7 +22,7 @@ function getDimValue(v: ShopifyVariantSpec, d: 0 | 1 | 2): string | null {
   return x.trim();
 }
 
-/** 参考图：整颗按钮上斜向缺货带 */
+/** Reference PDP: diagonal OOS stripe across whole button */
 function OosDiagonalBand() {
   return (
     <span
@@ -41,7 +41,7 @@ type Props = {
   selectedVariantId: string;
   onSelectVariant: (variantId: string) => void;
   /**
-   * `storefront`：模仿参考 PDP — 单值选项为「Color: Sage」行内文案；多值 / Style 为全宽纵排、居中、细边未选 / 粗边选中、缺货斜线。
+   * `storefront`: mimic reference PDP — single-value options inline like "Color: Sage"; multi-value / Style full-width stack, centered, thin border unselected / thick selected, diagonal OOS stripe.
    */
   variant?: "default" | "storefront";
   dark?: boolean;
@@ -270,7 +270,7 @@ function OptionGroupRow({
                   oos && "opacity-60",
                   oos && "line-through decoration-2"
                 )}
-                title={oos ? "缺货" : val}
+                title={oos ? "Out of stock" : val}
               >
                 {val}
               </button>
@@ -345,7 +345,7 @@ function OptionGroupRow({
                 possible && oos && "opacity-50",
                 oos && "line-through decoration-2"
               )}
-              title={oos ? "缺货" : possible ? val : "不可选"}
+              title={oos ? "Out of stock" : possible ? val : "Unavailable"}
             >
               {val}
             </button>

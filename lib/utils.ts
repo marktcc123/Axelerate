@@ -5,7 +5,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-/** 同步复制（须落在用户手势里，例如 pointerdown），避免 Drawer 等与异步 Clipboard 抢焦点导致 execCommand 复制到页面上无关选区 */
+/** Sync copy inside a real user gesture (e.g. pointerdown); avoids Drawer/async Clipboard stealing focus so execCommand copies stray page selection */
 function legacyCopyViaTextarea(text: string): boolean {
   try {
     if (typeof document === 'undefined') return false
@@ -19,7 +19,7 @@ function legacyCopyViaTextarea(text: string): boolean {
     const ta = document.createElement('textarea')
     ta.value = text
     ta.readOnly = false
-    // 勿用 readonly：部分 Chromium 会跳过选中复制；移出可视区，避免 Radix FocusScope 抢到错误选区
+    // Avoid readonly: some Chromium builds skip selectable copy; off-screen avoids Radix FocusScope grabbing wrong range
     ta.style.cssText =
       'position:fixed;top:0;left:-9999px;width:320px;height:1px;margin:0;padding:0;border:0;opacity:0;pointer-events:none'
     ta.setAttribute('aria-hidden', 'true')
@@ -43,7 +43,7 @@ function legacyCopyViaTextarea(text: string): boolean {
   }
 }
 
-/** 在 pointerdown 等同步手势里调用，优先保证剪贴板内容正确（再配 onClick 里的异步 API 兜底） */
+/** Call on pointerdown (sync gesture); prefer correct clipboard payload, pairing with async API fallback in onClick */
 export function copyTextToClipboardSync(text: string): boolean {
   const t = text.trim()
   if (!t) return false

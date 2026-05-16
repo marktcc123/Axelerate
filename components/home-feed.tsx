@@ -57,6 +57,7 @@ import {
 } from "@/components/ui/drawer";
 import { BrandsDrawer } from "./drawers/brands-drawer";
 import { FeedNotificationsBell } from "./feed-notifications-bell";
+import { FeedRulesWaveBanner } from "./feed-rules-wave-banner";
 import type { FeedNotificationNavAction } from "@/lib/feed-notifications";
 
 type Filter = "all" | "digital" | "physical";
@@ -629,7 +630,7 @@ function GigCard({
         </div>
       )}
 
-      {/* 左侧文字区：flex-1 min-w-0 确保文字能正常截断，不被挤压 */}
+      {/* Left text: flex-1 min-w-0 so truncation works */}
       <div className="flex-1 min-w-0 w-full pr-0 sm:pr-4">
         <h4 className="truncate text-base font-bold text-foreground transition-colors group-hover:text-[var(--theme-primary)]">
           {gig.title}
@@ -641,7 +642,7 @@ function GigCard({
         </div>
       </div>
 
-      {/* 右侧徽章与箭头区：shrink-0 防止被左边挤压，手机端换行 */}
+      {/* Right badge row: shrink-0; wraps on narrow screens */}
       <div className="flex items-center gap-1.5 shrink-0 flex-wrap sm:flex-nowrap justify-end">
         {gig.reward_cash > 0 && (
           <span className="inline-flex items-center gap-0.5 rounded border border-emerald-600/35 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-bold text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400">
@@ -847,7 +848,7 @@ export function HomeFeed({
     return { gigs, brands: allBrands, products };
   }, [debouncedSearch, publicGigs, publicProducts, brands]);
 
-  /** 有任意 is_featured 时仅展示精选（最多 6）；否则按名称取前 6 */
+  /** If any brand is_featured, show only featured (max 6); else first 6 by name */
   const brandsForFeedStrip = useMemo(() => {
     const featured = brands.filter((b) => b.is_featured);
     if (featured.length > 0) {
@@ -860,7 +861,7 @@ export function HomeFeed({
       .slice(0, 6);
   }, [brands]);
 
-  /** 有任意 is_featured 时仅展示精选（按创建时间新→旧，最多 12）；否则沿用全表最新 12 */
+  /** If any product is_featured, featured only (newest first, max 12); else latest 12 overall */
   const productsForTrending = useMemo(() => {
     const featured = publicProducts.filter((p) => p.is_featured === true);
     if (featured.length > 0) {
@@ -1023,6 +1024,8 @@ export function HomeFeed({
               </p>
             </div>
           </div>
+
+          <FeedRulesWaveBanner />
         </>
       )}
 
