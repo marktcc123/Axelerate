@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { User } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -15,6 +16,12 @@ interface LazyLoginPromptProps {
   redirectPath?: string;
 }
 
+const STORAGE_TCPA_TERMS_MS = "axelerate_tcpa_terms_accepted_at";
+const STORAGE_SMS_OPT_IN = "axelerate_sms_marketing_opt_in_pending";
+
+/** Set true to show optional SMS marketing checkbox again */
+const SHOW_SMS_OPT_IN_CHECKBOX = false;
+
 export function LazyLoginPrompt({
   variant = "default",
   redirectPath,
@@ -23,7 +30,22 @@ export function LazyLoginPrompt({
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
-  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [isTermsAccepted, setIsTermsAccepted] = useState(false);
+  const [isSmsAccepted, setIsSmsAccepted] = useState(false);
+  /** Plays neo-brutal red border shake when user tries OAuth / magic link without accepting terms */
+  const [termsRemind, setTermsRemind] = useState(false);
+
+  useEffect(() => {
+    if (!termsRemind) return;
+    const t = window.setTimeout(() => setTermsRemind(false), 620);
+    return () => window.clearTimeout(t);
+  }, [termsRemind]);
+
+  const pokeTermsReminder = useCallback(() => {
+    setTermsRemind(false);
+    queueMicrotask(() => setTermsRemind(true));
+  }, []);
+
   const supabase = createClient();
 
   const nextQuery =
@@ -38,8 +60,23 @@ export function LazyLoginPrompt({
     typeof window !== "undefined" ? window.location.origin : ""
   }/auth/callback${nextQuery}`;
 
+  const stashAuthComplianceFlags = () => {
+    try {
+      const iso = new Date().toISOString();
+      sessionStorage.setItem(STORAGE_TCPA_TERMS_MS, iso);
+      sessionStorage.setItem(STORAGE_SMS_OPT_IN, isSmsAccepted ? "1" : "0");
+    } catch {
+      //
+    }
+  };
+
   const handleGoogleLogin = () => {
-    if (!agreedToTerms) return;
+    if (loading) return;
+    if (!isTermsAccepted) {
+      pokeTermsReminder();
+      return;
+    }
+    stashAuthComplianceFlags();
     supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
@@ -52,17 +89,27 @@ export function LazyLoginPrompt({
     try {
       localStorage.removeItem("axelerate_has_seen_intro");
       window.location.reload();
-    } catch {}
+    } catch {
+      //
+    }
   };
 
   const handleMagicLinkLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!agreedToTerms) return;
+    if (!isTermsAccepted) {
+      pokeTermsReminder();
+      return;
+    }
     setLoading(true);
+    stashAuthComplianceFlags();
     const { error } = await supabase.auth.signInWithOtp({
-      email: email,
+      email: email.trim(),
       options: {
         emailRedirectTo: callbackUrl,
+        data: {
+          sms_marketing_opt_in: isSmsAccepted,
+          tcpa_terms_accepted_at: new Date().toISOString(),
+        },
       },
     });
     setLoading(false);
@@ -72,6 +119,8 @@ export function LazyLoginPrompt({
       setSent(true);
     }
   };
+
+  const authBlocked = !isTermsAccepted;
 
   if (sent) {
     return (
@@ -84,9 +133,9 @@ export function LazyLoginPrompt({
         <div
           className={cn(
             "mb-4 flex h-20 w-20 items-center justify-center",
-            isOnboarding
-              ? "rounded-2xl border-2 border-border bg-brand-primary/15 shadow-sm dark:border-white/10"
-              : "rounded-full bg-brand-primary/10 ring-2 ring-brand-primary/20"
+            isOnboarding ?
+              "rounded-2xl border-2 border-border bg-brand-primary/15 shadow-sm dark:border-white/10"
+            : "rounded-full bg-brand-primary/10 ring-2 ring-brand-primary/20"
           )}
         >
           <span className="text-3xl">✨</span>
@@ -100,9 +149,9 @@ export function LazyLoginPrompt({
           onClick={handleResetIntro}
           className={cn(
             "relative z-10 -m-2 cursor-pointer self-end px-3 py-2 text-[10px] transition-colors",
-            isOnboarding
-              ? "font-mono font-bold uppercase tracking-widest text-muted-foreground hover:text-foreground"
-              : "text-muted-foreground hover:text-foreground"
+            isOnboarding ?
+              "font-mono font-bold uppercase tracking-widest text-muted-foreground hover:text-foreground"
+            : "text-muted-foreground hover:text-foreground"
           )}
         >
           Reset Intro
@@ -110,6 +159,9 @@ export function LazyLoginPrompt({
       </div>
     );
   }
+
+  const linkMutedClass =
+    "font-bold text-brand-primary underline decoration-2 underline-offset-2 hover:text-brand-primary/90 dark:text-purple-400 dark:hover:text-purple-300";
 
   return (
     <div
@@ -126,32 +178,67 @@ export function LazyLoginPrompt({
       >
         <User className="h-10 w-10 text-brand-primary" />
       </div>
-      <h2 className="mb-1 text-xl font-bold tracking-tight text-foreground">Unlock Axelerate</h2>
-      <p className="mb-6 text-sm font-medium text-muted-foreground">Choose how you want to sign in</p>
+      <h2 className="mb-1 text-xl font-bold tracking-tight text-foreground">
+        Unlock Axelerate
+      </h2>
+      <p className="mb-6 text-sm font-medium text-muted-foreground">
+        Choose how you want to sign in
+      </p>
 
+      {/* Required — TCPA / AB5 + consumer + creator acknowledgement */}
       <label
         className={cn(
-          "mb-4 flex cursor-pointer items-start gap-3 rounded-2xl border-2 border-border bg-muted/40 p-3 text-left transition-colors dark:border-white/10 dark:bg-white/5",
-          !agreedToTerms && "ring-2 ring-brand-primary/30 ring-offset-2 ring-offset-background"
+          "flex w-full cursor-pointer items-start gap-3 rounded-2xl border-2 border-border bg-muted/35 p-3.5 text-left shadow-[var(--shadow-sm)] outline-none transition-colors dark:border-white/10 dark:bg-zinc-900/85 dark:shadow-none",
+          SHOW_SMS_OPT_IN_CHECKBOX ? "mb-3" : "mb-5",
+          !isTermsAccepted && "ring-2 ring-brand-primary/25 ring-offset-2 ring-offset-background dark:ring-offset-zinc-950",
+          termsRemind && "login-tcpa-terms-remind ring-2 ring-red-500/90 ring-offset-2 ring-offset-background dark:ring-offset-zinc-950"
         )}
       >
         <Checkbox
-          checked={agreedToTerms}
-          onCheckedChange={(v) => setAgreedToTerms(v === true)}
-          className="mt-0.5 shrink-0 border-border data-[state=checked]:border-brand-primary data-[state=checked]:bg-brand-primary"
+          checked={isTermsAccepted}
+          onCheckedChange={(v) => setIsTermsAccepted(v === true)}
+          className="mt-1 h-5 w-5 shrink-0 rounded-lg border-[2px] border-border shadow-[2px_2px_0_0_rgba(0,0,0,1)] transition-transform data-[state=checked]:border-brand-primary data-[state=checked]:bg-brand-primary data-[state=checked]:shadow-[3px_3px_0_0_rgba(0,0,0,0.85)] dark:border-white/20 dark:data-[state=checked]:shadow-[3px_3px_0_0_rgba(0,0,0,1)]"
         />
-        <span className="text-xs text-muted-foreground">
-          I agree to the Terms of Service and Privacy Policy. I understand that by joining, I am an{" "}
-          <strong className="font-bold text-foreground">Independent Contractor</strong> of Axelerate
-          Inc. (Walnut, CA).
+        <span className={cn("text-xs leading-relaxed text-foreground", isOnboarding ? "tracking-tight" : "")}>
+          I agree to the{" "}
+          <Link href="/terms" className={linkMutedClass} target="_blank" rel="noopener noreferrer">
+            Terms of Service
+          </Link>{" "}
+          and{" "}
+          <Link href="/privacy" className={linkMutedClass} target="_blank" rel="noopener noreferrer">
+            Privacy Policy
+          </Link>
+          . I acknowledge that if I participate in paid gigs or campaigns, I do so as an{" "}
+          <strong className="font-semibold text-foreground">Independent Contractor</strong>, not an
+          employee.
         </span>
       </label>
 
+      {/* Optional TCPA SMS consent — gated while product pauses SMS collection */}
+      {SHOW_SMS_OPT_IN_CHECKBOX && (
+      <label className="mb-5 flex w-full cursor-pointer items-start gap-3 rounded-xl border-2 border-dashed border-border/80 bg-muted/20 p-3 text-left dark:border-white/10 dark:bg-zinc-900/55">
+        <Checkbox
+          checked={isSmsAccepted}
+          onCheckedChange={(v) => setIsSmsAccepted(v === true)}
+          className="mt-0.5 h-4 w-4 shrink-0 rounded border-2 border-border dark:border-white/15 data-[state=checked]:border-amber-500 data-[state=checked]:bg-amber-500"
+        />
+        <span className="text-[11px] leading-snug text-muted-foreground">
+          <span className="font-semibold text-foreground/80">(Optional)</span> Send me SMS drops and
+          exclusive gig alerts. Msg &amp; data rates may apply.
+        </span>
+      </label>
+      )}
+
       <button
         type="button"
+        disabled={loading}
         onClick={handleGoogleLogin}
-        disabled={!agreedToTerms}
-        className="flex w-full items-center justify-center gap-3 rounded-2xl border-2 border-border bg-card px-6 py-3.5 text-sm font-bold text-foreground transition-all hover:bg-muted/60 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+        aria-disabled={authBlocked || loading}
+        className={cn(
+          "flex w-full items-center justify-center gap-3 rounded-2xl border-2 border-border bg-card px-6 py-3.5 text-sm font-bold text-foreground shadow-[var(--shadow-sm)] transition-all hover:bg-muted/60 hover:brightness-[1.02] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none dark:border-white/15 dark:bg-zinc-950 dark:hover:bg-zinc-900 dark:shadow-[4px_4px_0_0_rgba(0,0,0,1)] dark:active:translate-x-[2px] dark:active:translate-y-[2px]",
+          authBlocked && "cursor-not-allowed opacity-50 saturate-75",
+          loading && "cursor-wait opacity-70"
+        )}
       >
         <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden>
           <path
@@ -176,12 +263,12 @@ export function LazyLoginPrompt({
 
       <div className="relative my-6 w-full">
         <div className="absolute inset-0 flex items-center">
-          <span className="w-full border-t border-border" />
+          <span className="w-full border-t border-border dark:border-white/10" />
         </div>
         <div className="relative flex justify-center text-xs uppercase tracking-widest">
           <span
             className={cn(
-              "bg-background px-3 text-muted-foreground",
+              "bg-background px-3 text-muted-foreground dark:bg-zinc-950",
               isOnboarding && "font-mono font-bold"
             )}
           >
@@ -198,16 +285,20 @@ export function LazyLoginPrompt({
           onChange={(e) => setEmail(e.target.value)}
           required
           className={cn(
-            "w-full rounded-2xl border-2 border-border bg-background px-4 py-3.5 text-sm text-foreground placeholder:text-muted-foreground transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary/50 dark:border-white/10 dark:bg-zinc-900",
+            "w-full rounded-2xl border-2 border-border bg-background px-4 py-3.5 text-sm text-foreground shadow-[var(--shadow-sm)] placeholder:text-muted-foreground transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary/50 dark:border-white/10 dark:bg-zinc-900 dark:shadow-[4px_4px_0_0_rgba(0,0,0,0.9)]",
             isOnboarding && "font-mono"
           )}
         />
         <button
           type="submit"
-          disabled={loading || !agreedToTerms}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-border bg-brand-primary px-6 py-3.5 text-sm font-bold uppercase tracking-wider text-primary-foreground transition-all hover:opacity-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10"
+          disabled={loading}
+          className={cn(
+            "flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-border bg-brand-primary px-6 py-3.5 text-sm font-bold uppercase tracking-wider text-primary-foreground shadow-[var(--shadow-sm)] transition-all hover:opacity-95 active:translate-x-[3px] active:translate-y-[3px] active:shadow-none disabled:cursor-wait dark:border-white/10 dark:shadow-[4px_4px_0_0_rgba(0,0,0,1)]",
+            authBlocked && "cursor-not-allowed opacity-50 saturate-75",
+            loading && "opacity-70"
+          )}
         >
-          {loading ? "Sending..." : "Send Magic Link"}
+          {loading ? "Sending..." : "SEND MAGIC LINK"}
         </button>
       </form>
       <button

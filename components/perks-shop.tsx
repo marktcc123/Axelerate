@@ -52,6 +52,7 @@ import {
   createDropshippingStripeCheckoutSession,
   isStripePaymentsEnabled,
 } from "@/app/actions/stripe-checkout";
+import { getProductCreditCashbackPercent } from "@/lib/product-cashback";
 import { joinWaitlist } from "@/app/actions/shop";
 import { useCartStore } from "@/store/cart-store";
 import {
@@ -223,7 +224,7 @@ function DropZoneBanner({
               <p className="text-xs text-muted-foreground">
                 {currentDrop.brand?.name ?? "—"}
               </p>
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className="text-lg font-black text-brand-primary">
                   $
                   {Number(
@@ -239,6 +240,18 @@ function DropZoneBanner({
                     </span>
                   )}
               </div>
+              {(() => {
+                const pct = getProductCreditCashbackPercent(currentDrop);
+                return (
+                  <p
+                    title="Catalog USD refunded as Credits after the order fulfills"
+                    className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-amber-800 dark:text-amber-300"
+                  >
+                    <Zap className="h-3 w-3 fill-current shrink-0" aria-hidden />
+                    <span>{pct}% Credits cashback</span>
+                  </p>
+                );
+              })()}
             </div>
             <button
               type="button"
@@ -1649,7 +1662,8 @@ export function PerksShop() {
         <header className="mb-6 px-1">
           <Skeleton className="mb-1 h-5 w-32" />
           <Skeleton className="mb-1 h-8 w-48" />
-          <Skeleton className="h-4 w-64" />
+          <Skeleton className="mb-2 h-4 w-56" />
+          <Skeleton className="h-[2.875rem] w-full max-w-2xl" />
         </header>
         <Skeleton className="mb-6 h-20 w-full rounded-2xl" />
         <Skeleton className="mb-6 h-12 w-full rounded-2xl" />
@@ -1676,6 +1690,9 @@ export function PerksShop() {
         </h1>
         <p className="font-mono text-sm text-muted-foreground">
           Earn it. Unlock it. Flex it.
+        </p>
+        <p className="mt-2.5 max-w-2xl font-mono text-[11px] leading-relaxed text-muted-foreground/90 sm:text-xs sm:leading-relaxed lg:max-w-3xl">
+          Axelerate secures cutting-edge brand perks exclusively for students, with the lowest price.
         </p>
       </header>
 
@@ -1785,6 +1802,8 @@ export function PerksShop() {
                 )
               : 0;
 
+          const creditCashbackPct = getProductCreditCashbackPercent(product);
+
           const stockLine =
             isSoldOut || product.stock_count <= 0
               ? "Sold out"
@@ -1796,8 +1815,7 @@ export function PerksShop() {
             <div
               key={product.id}
               className={cn(
-                "animate-slide-up relative flex min-h-0 flex-col overflow-hidden rounded-2xl border-2 border-border bg-card shadow-sm transition-all duration-300 hover:border-brand-primary/30 hover:shadow-md dark:border-white/10 dark:bg-zinc-900/80 dark:hover:shadow-[0_0_24px_rgba(var(--theme-primary-rgb),0.1)]",
-                imageHover && "min-h-[22rem]"
+                "animate-slide-up relative flex min-h-0 flex-col overflow-hidden rounded-2xl border-2 border-border bg-card shadow-sm transition-all duration-300 hover:border-brand-primary/30 hover:shadow-md dark:border-white/10 dark:bg-zinc-900/80 dark:hover:shadow-[0_0_24px_rgba(var(--theme-primary-rgb),0.1)]"
               )}
               style={{ animationDelay: `${i * 80}ms` }}
             >
@@ -1831,31 +1849,62 @@ export function PerksShop() {
                 </div>
               )}
 
-              <Link
-                href={"/product/" + product.id}
-                className="group relative z-0 block w-full min-h-36 overflow-hidden rounded-t-2xl transition-[border-radius] duration-300 ease-out hover:absolute hover:inset-0 hover:z-20 hover:min-h-0 hover:h-full hover:rounded-2xl"
+              {/* Explicit height fills parent — avoids gap under image when enlarged (was min-only + mismatched outer min-h) */}
+              <div
+                className={cn(
+                  "relative z-10 w-full shrink-0 overflow-hidden rounded-t-2xl border-b border-border bg-muted/50 backdrop-blur-sm transition-[height,min-height] duration-300 ease-out dark:border-white/5 dark:bg-white/5",
+                  imageHover ?
+                    "h-[min(22rem,calc(100vw-5rem))] min-h-36"
+                  : "h-36 min-h-36"
+                )}
                 onMouseEnter={() => setShopCardImageHoverId(product.id)}
-                onMouseLeave={() =>
-                  setShopCardImageHoverId((c) =>
-                    c === product.id ? null : c
-                  )
-                }
+                onMouseLeave={(e) => {
+                  const rel = e.relatedTarget;
+                  if (
+                    rel instanceof Node &&
+                    (e.currentTarget as HTMLElement).contains(rel)
+                  ) {
+                    return;
+                  }
+                  setShopCardImageHoverId((cur) =>
+                    cur === product.id ? null : cur
+                  );
+                }}
               >
-                <div className="relative flex h-36 min-h-36 shrink-0 items-center justify-center overflow-hidden rounded-t-2xl border-b border-border bg-muted/50 backdrop-blur-sm transition-all duration-500 ease-out dark:border-white/5 dark:bg-white/5 group-hover:absolute group-hover:inset-0 group-hover:z-20 group-hover:h-full group-hover:min-h-0 group-hover:rounded-2xl group-hover:border-b-0">
+                <Link
+                  href={"/product/" + product.id}
+                  className="relative isolate flex h-full min-h-0 flex-col overflow-hidden rounded-t-2xl"
+                >
                   {product.stock_count <= 0 && (
-                    <div className="absolute left-2 top-2 z-10 rounded bg-red-500/90 px-2 py-1 text-[10px] font-bold tracking-wider text-white backdrop-blur-sm transition-opacity duration-300 group-hover:opacity-0">
+                    <div
+                      className={cn(
+                        "absolute left-2 top-2 z-10 rounded bg-red-500/90 px-2 py-1 text-[10px] font-bold tracking-wider text-white backdrop-blur-sm transition-opacity duration-300",
+                        imageHover && "opacity-0"
+                      )}
+                    >
                       SOLD OUT
                     </div>
                   )}
                   <ProductCardHoverImage
                     product={product}
-                    className="h-full w-full min-h-full"
-                    imgClassName="h-full w-full min-h-full"
+                    interactionActive={imageHover}
+                    className="relative h-full min-h-0 flex-1 overflow-hidden rounded-t-2xl"
+                    imgClassName="pointer-events-none"
+                  >
+                  <div
+                    className={cn(
+                      "pointer-events-none absolute inset-0 z-[21] bg-gradient-to-t from-black/85 via-black/25 to-black/5 transition-opacity duration-300",
+                      imageHover ? "opacity-100" : "opacity-0"
+                    )}
                   />
-                  <div className="pointer-events-none absolute inset-0 z-[21] bg-gradient-to-t from-black/85 via-black/25 to-black/5 opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
-                  <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[22] flex items-end justify-between gap-2 p-3 pt-14 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                  <div
+                    className={cn(
+                      "pointer-events-none absolute inset-x-0 bottom-0 z-[22] flex items-end justify-between gap-2 p-3 pt-14 transition-opacity duration-300",
+                      imageHover ? "opacity-100" : "opacity-0"
+                    )}
+                  >
                     <div className="min-w-0 max-w-[58%]">
-                      <p className="line-clamp-2 text-xs font-bold leading-tight text-white drop-shadow-md">
+                      <p className="line-clamp-2 text-xs font-bold leading-snug text-white drop-shadow-md">
                         {product.title}
                       </p>
                       <p className="mt-0.5 text-[10px] font-medium text-white/88">
@@ -1879,8 +1928,9 @@ export function PerksShop() {
                       </p>
                     </div>
                   </div>
-                </div>
-              </Link>
+                  </ProductCardHoverImage>
+                </Link>
+              </div>
 
               <div
                 className={cn(
@@ -1895,11 +1945,23 @@ export function PerksShop() {
                       🔥 {discountPct}% OFF
                     </span>
                   )}
-                  <span className="rounded-md border border-border bg-muted/60 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground dark:border-white/10 dark:bg-white/10">
-                    STUDENT EXCLUSIVE
-                  </span>
-                  <span className="rounded-md border border-border bg-muted/60 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground dark:border-white/10 dark:bg-white/10">
-                    LOWEST PRICE GUARANTEED
+                  <span
+                    title="Percent of catalog USD returned as Credits (Pts) after your order fulfills"
+                    className={cn(
+                      "inline-flex items-center gap-0.5 rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider",
+                      creditCashbackPct > 0
+                        ? "border-amber-500/35 bg-amber-500/[0.12] text-amber-800 dark:text-amber-200"
+                        : "border-border bg-muted/60 text-muted-foreground dark:border-white/10 dark:bg-white/10"
+                    )}
+                  >
+                    <Zap
+                      className={cn(
+                        "h-3 w-3 shrink-0 text-current",
+                        creditCashbackPct > 0 && "fill-amber-700 dark:fill-amber-300"
+                      )}
+                      aria-hidden
+                    />
+                    {creditCashbackPct}% cashback
                   </span>
                 </div>
 

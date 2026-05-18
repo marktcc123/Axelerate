@@ -2,7 +2,24 @@
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
-import { ShoppingCart, Package, Zap, Star, Truck, Lock, BellRing, Check } from "lucide-react";
+import {
+  ShoppingCart,
+  Package,
+  Zap,
+  Star,
+  Truck,
+  Lock,
+  BellRing,
+  Check,
+  Tag,
+  MapPin,
+  Sparkles,
+  ShieldCheck,
+  Hash,
+  Award,
+  Box,
+  type LucideIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { Product, ProductReview } from "@/lib/types";
@@ -23,6 +40,33 @@ import {
 } from "@/lib/shopify/product-specifications";
 import { buildOptionGroups } from "@/lib/shopify/variant-ui";
 import { ProductImageLightbox } from "@/components/product-image-lightbox";
+import { getProductCreditCashbackPercent } from "@/lib/product-cashback";
+
+/** Icons rotate deterministically per tag label (neo-brutal PDP rows). */
+const TAG_ROW_ICONS: LucideIcon[] = [
+  Tag,
+  Truck,
+  MapPin,
+  Sparkles,
+  ShieldCheck,
+  Award,
+  Box,
+  Hash,
+  Package,
+];
+
+function hashTagLabel(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function parseShopifyProductTags(raw: unknown): string[] {
+  if (raw == null) return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+  return [...new Set(s.split(",").map((p) => p.trim()).filter(Boolean))];
+}
 
 function StarRating({ rating }: { rating: number }) {
   const full = Math.floor(rating);
@@ -404,14 +448,27 @@ export default function ProductDetailPage() {
   }
 
   const category = product.category ?? "Product";
+  const creditCashbackPct = getProductCreditCashbackPercent(product);
   const brandLink =
     product.brand_link_url ?? (product.brand ? "/" : undefined);
   const rawSpec = product.specifications;
+  const productTagsParsed = parseShopifyProductTags(
+    rawSpec &&
+      typeof rawSpec === "object" &&
+      !Array.isArray(rawSpec) &&
+      (rawSpec as Record<string, unknown>).shopify_product_tags
+  );
+
   const specTableEntries: [string, string][] =
     !rawSpec || typeof rawSpec !== "object" || Array.isArray(rawSpec)
       ? []
       : Object.entries(rawSpec as Record<string, unknown>)
-          .filter(([k]) => k !== "shopify_variants" && k !== "shopify_options")
+          .filter(
+            ([k]) =>
+              k !== "shopify_variants" &&
+              k !== "shopify_options" &&
+              k !== "shopify_product_tags"
+          )
           .map(([k, v]) => {
             if (v == null) return [k, "—"] as [string, string];
             if (typeof v === "object") return [k, JSON.stringify(v)] as [string, string];
@@ -578,6 +635,28 @@ export default function ProductDetailPage() {
                 Or redeem for {product.price_credits} Pts
               </p>
             )}
+            <p className={cn(
+              "mt-2 flex items-center gap-1.5 text-sm",
+              creditCashbackPct > 0 ? "text-amber-400/95" : "text-zinc-500"
+            )}>
+              <Zap
+                size={14}
+                className={cn(
+                  "shrink-0",
+                  creditCashbackPct > 0 ? "fill-amber-400" : "fill-zinc-500"
+                )}
+                aria-hidden
+              />
+              {creditCashbackPct > 0 ? (
+                <>
+                  <span>Earn </span>
+                  <span className="font-semibold">{creditCashbackPct}%</span>
+                  <span> back in Credits after checkout (catalog USD).</span>
+                </>
+              ) : (
+                <span>No Credits cashback on this product.</span>
+              )}
+            </p>
 
             <hr className="my-5 border-0 border-t border-white/10" />
 
@@ -772,13 +851,40 @@ export default function ProductDetailPage() {
 
         {/* Bottom: Specs & Reviews (另起一行) */}
         <div className="mt-16 w-full space-y-12">
-          {/* Specifications */}
+          {/* Shopify tags — excluded from KV table */}
+          {productTagsParsed.length > 0 && (
+            <div>
+              <h2 className="mb-4 text-xl font-bold text-white">Tags</h2>
+              <div className="overflow-hidden rounded-xl border border-white/10 bg-[#0a0a0a] shadow-[6px_6px_0_0_rgba(0,0,0,0.85)]">
+                <ul className="divide-y divide-white/5">
+                  {productTagsParsed.map((tag, idx) => {
+                    const Icon = TAG_ROW_ICONS[hashTagLabel(tag.toLowerCase()) % TAG_ROW_ICONS.length];
+                    return (
+                      <li
+                        key={`${tag}-${idx}`}
+                        className="flex items-center gap-3 px-4 py-3.5 sm:gap-4 sm:px-5"
+                      >
+                        <span
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-black/60 text-[var(--theme-primary)]"
+                          aria-hidden
+                        >
+                          <Icon className="h-4 w-4" strokeWidth={2.25} />
+                        </span>
+                        <span className="min-w-0 flex-1 text-sm font-medium text-white">{tag}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            </div>
+          )}
+
           {specTableEntries.length > 0 && (
             <div>
-              <h2 className="text-xl font-bold text-white mb-4">
+              <h2 className="mb-4 text-xl font-bold text-white">
                 Technical Specifications
               </h2>
-              <div className="rounded-xl border border-white/10 bg-[#0a0a0a] overflow-hidden">
+              <div className="overflow-hidden rounded-xl border border-white/10 bg-[#0a0a0a]">
                 <table className="w-full text-sm">
                   <tbody>
                     {specTableEntries.map(([key, value]) => (
@@ -786,10 +892,10 @@ export default function ProductDetailPage() {
                         key={key}
                         className="border-b border-white/5 last:border-0"
                       >
-                        <td className="py-3 px-4 text-gray-400 font-medium w-1/3">
+                        <td className="w-1/3 px-4 py-3 font-medium text-gray-400">
                           {key}
                         </td>
-                        <td className="py-3 px-4 text-white">
+                        <td className="px-4 py-3 text-white">
                           {value}
                         </td>
                       </tr>

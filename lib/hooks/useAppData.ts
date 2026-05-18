@@ -35,9 +35,9 @@ export interface EventApplication {
 export interface UseAppDataReturn {
   user: User | null;
   profile: Profile | null;
-  /** 主题色来源，来自 profile.app_theme */
+  /** Theme colors from `profile.app_theme` */
   themeSchool: School | null;
-  /** 校园身份展示，来自 profile.campus */
+  /** Campus label from `profile.campus` */
   campusSchool: School | null;
   publicGigs: Gig[];
   publicProducts: Product[];
@@ -47,7 +47,7 @@ export interface UseAppDataReturn {
   eventApplications: EventApplication[];
   orders: Order[];
   transactions: Transaction[];
-  /** 合并流水：transactions + 订单 + 提现 + Gig 发薪等 */
+  /** Unified ledger: transactions, orders, withdrawals, gig payouts, etc. */
   walletActivity: WalletActivityItem[];
   isLoadingPublic: boolean;
   isLoadingPrivate: boolean;
@@ -73,7 +73,7 @@ export function useAppData(): UseAppDataReturn {
 
   const supabase = createClient();
 
-  // Public Data Fetching (免登录)
+  // Public data (no auth)
   const fetchPublicData = useCallback(async () => {
     setIsLoadingPublic(true);
     try {
@@ -102,14 +102,12 @@ export function useAppData(): UseAppDataReturn {
     }
   }, [supabase]);
 
-  // Private Data Fetching (依赖 user.id)
+  // Private data (requires `userId`)
   const fetchPrivateData = useCallback(
     async (userId: string, silent = false, clearFirst = false) => {
       if (clearFirst) setOrders([]);
       if (!silent) setIsLoadingPrivate(true);
       try {
-        console.log("DEBUG: Fetching event apps for user:", userId);
-
         const [profileRes, userGigsRes, eventAppsRes, txRes] = await Promise.all([
           supabase.from("profiles").select("*").eq("id", userId).single(),
           supabase
@@ -119,7 +117,7 @@ export function useAppData(): UseAppDataReturn {
             .order("applied_at", { ascending: false }),
           supabase
             .from("event_applications")
-            .select("*, event:events(*)") // 核心：连表查询并重命名为单数 event
+            .select("*, event:events(*)") // join events; alias singular `event`
             .eq("user_id", userId)
             .order("created_at", { ascending: false }),
           supabase
@@ -171,12 +169,10 @@ export function useAppData(): UseAppDataReturn {
         if (userGigsRes.data) setUserGigs(userGigsRes.data as UserGig[]);
         else setUserGigs([]);
 
-        // event_applications 拉取与赋值（强制 DEBUG 追踪）
         if (eventAppsRes.error) {
-          console.error("DEBUG: Supabase query error (Event Apps):", eventAppsRes.error);
+          console.error("[useAppData] Event applications fetch error:", eventAppsRes.error);
           setEventApplications([]);
         } else {
-          console.log("DEBUG: Successfully fetched Event Apps:", eventAppsRes.data);
           const rawData = eventAppsRes.data ?? [];
           const apps = (rawData as { event?: unknown; events?: unknown }[]).map((row) => {
             const eventOrEvents = row.event ?? row.events;
@@ -186,21 +182,11 @@ export function useAppData(): UseAppDataReturn {
           setEventApplications(apps as EventApplication[]);
         }
 
-        const usedMinFallback = !!(
-          ordersExtRes.error && isMissingColumnPostgrestError(ordersExtRes.error)
-        );
-        const extFailedNonMissingCol = !!(
-          ordersExtRes.error && !isMissingColumnPostgrestError(ordersExtRes.error)
-        );
-
         if (ordersErr) {
           console.error("[useAppData] Orders fetch error:", ordersErr);
           setOrders([]);
         } else if (ordersData) {
           setOrders(ordersData);
-          if (ordersData.length > 0) {
-            console.log("DEBUG: Latest order status from DB:", ordersData[0]?.status);
-          }
         } else {
           setOrders([]);
         }
@@ -217,11 +203,11 @@ export function useAppData(): UseAppDataReturn {
           setWalletActivity([]);
         }
       } catch (e) {
-      console.error("[useAppData] Private fetch error:", e);
-    } finally {
-      if (!silent) setIsLoadingPrivate(false);
-    }
-  },
+        console.error("[useAppData] Private fetch error:", e);
+      } finally {
+        if (!silent) setIsLoadingPrivate(false);
+      }
+    },
     [supabase]
   );
 
@@ -233,12 +219,12 @@ export function useAppData(): UseAppDataReturn {
     [user?.id, fetchPrivateData]
   );
 
-  // 初始化：加载 Public 数据
+  // Initial public load
   useEffect(() => {
     fetchPublicData();
   }, [fetchPublicData]);
 
-  // 监听 Auth 状态，加载 Private 数据
+  // Auth → private data
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
@@ -274,9 +260,9 @@ export function useAppData(): UseAppDataReturn {
   }, [supabase, fetchPrivateData]);
 
   /**
-   * 与 Supabase 同步：当前用户 orders 表任意变更时静默重拉订单列表。
-   * 验证方式：Dashboard → Database → Replication 为 `public.orders` 打开 INSERT/UPDATE/DELETE；
-   * 在 Table Editor 改一条订单 status，抽屉 / Profile 订单应在几秒内自动更新（无需刷新页）。
+   * Supabase Realtime: any change to this user’s `orders` rows triggers a silent refetch.
+   * Enable replication for `public.orders` (INSERT/UPDATE/DELETE) in the Dashboard; edits in
+   * Table Editor should flow to drawers / profile order lists within a few seconds without reload.
    */
   useEffect(() => {
     if (!user?.id) return;

@@ -22,8 +22,10 @@ type Props = {
   product: Product;
   className?: string;
   imgClassName?: string;
-  /** 多图时悬停自动切换间隔，默认 1.4s */
+  /** 多图时悬停自动切换间隔（ms） */
   intervalMs?: number;
+  /** 若为 boolean：由父级（如仅在图片区域的 hover）驱动轮播与缩放；不传则沿用层内鼠标进入/离开 */
+  interactionActive?: boolean;
   children?: React.ReactNode;
 };
 
@@ -35,6 +37,7 @@ export function ProductCardHoverImage({
   className,
   imgClassName = "h-full w-full object-cover",
   intervalMs = 800,
+  interactionActive,
   children,
 }: Props) {
   const urls = useMemo(
@@ -65,14 +68,36 @@ export function ProductCardHoverImage({
     setIdx(0);
   }, [clearTimer]);
 
+  const controlled = interactionActive !== undefined;
+
+  useEffect(() => {
+    if (!controlled) return;
+    clearTimer();
+    if (!interactionActive || urls.length <= 1) {
+      setIdx(0);
+      return;
+    }
+    setIdx(0);
+    timerRef.current = setInterval(() => {
+      setIdx((i) => (i + 1) % urls.length);
+    }, intervalMs);
+    return clearTimer;
+  }, [controlled, interactionActive, urls.length, intervalMs, clearTimer]);
+
   useEffect(() => () => clearTimer(), [clearTimer]);
+
+  const idlePointerHandlers = controlled
+    ? {}
+    : { onMouseEnter: onEnter, onMouseLeave: onLeave };
+
+  const imgZoomClass =
+    controlled ? (interactionActive ? "scale-110" : "") : "group-hover:scale-110";
 
   if (urls.length === 0) {
     return (
       <div
-        className={cn("relative overflow-hidden", className)}
-        onMouseEnter={onEnter}
-        onMouseLeave={onLeave}
+        className={cn("relative h-full min-h-[9rem] w-full overflow-hidden", className)}
+        {...idlePointerHandlers}
       >
         <div className="flex h-full w-full items-center justify-center bg-muted dark:bg-zinc-800">
           <Package className="h-10 w-10 text-muted-foreground" />
@@ -83,16 +108,13 @@ export function ProductCardHoverImage({
   }
 
   return (
-    <div
-      className={cn("relative overflow-hidden", className)}
-      onMouseEnter={onEnter}
-      onMouseLeave={onLeave}
-    >
+    <div className={cn("relative h-full min-h-0 w-full overflow-hidden", className)} {...idlePointerHandlers}>
       <img
         src={urls[idx] ?? urls[0]}
         alt={product.title}
         className={cn(
-          "object-cover transition-transform duration-500 ease-out will-change-transform group-hover:scale-110",
+          "absolute inset-0 size-full object-cover transition-transform duration-500 ease-out will-change-transform",
+          imgZoomClass || undefined,
           imgClassName
         )}
         draggable={false}

@@ -27,6 +27,7 @@ import {
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { getProductCreditCashbackPercent } from "@/lib/product-cashback";
 import { ProductCardHoverImage } from "@/components/product-card-hover-image";
 import { useAppDataContext } from "@/lib/context/app-data-context";
 import {
@@ -1181,11 +1182,12 @@ export function HomeFeed({
               const stockLine =
                 stock <= 0 ? "Sold out" : `Only ${stock} left`;
               const imageHover = trendingCardImageHoverId === product.id;
+              const creditCashbackPct = getProductCreditCashbackPercent(product);
               return (
                 <Link
                   key={product.id}
                   href={"/product/" + product.id}
-                  className="relative flex h-56 w-40 min-w-[160px] shrink-0 cursor-pointer snap-center flex-col overflow-hidden rounded-2xl border-2 border-border bg-card text-card-foreground shadow-md transition-all hover:border-primary/40 dark:border-white/10 dark:bg-gradient-to-b dark:from-zinc-900 dark:to-zinc-950 dark:shadow-lg"
+                  className="relative flex h-[15.75rem] w-40 min-w-[160px] shrink-0 cursor-pointer snap-center flex-col overflow-hidden rounded-2xl border-2 border-border bg-card text-card-foreground shadow-md transition-all hover:border-primary/40 dark:border-white/10 dark:bg-gradient-to-b dark:from-zinc-900 dark:to-zinc-950 dark:shadow-lg"
                 >
                   <div
                     className="group relative z-10 h-32 shrink-0 overflow-hidden transition-all duration-500 ease-out hover:absolute hover:inset-0 hover:z-20 hover:h-full hover:rounded-2xl"
@@ -1210,7 +1212,7 @@ export function HomeFeed({
                     <div className="pointer-events-none absolute inset-0 z-20 bg-gradient-to-t from-black/85 via-black/25 to-black/5 opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-end justify-between gap-2 p-2.5 pt-12 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
                       <div className="min-w-0 max-w-[58%]">
-                        <p className="line-clamp-2 text-[11px] font-bold leading-tight text-white drop-shadow-sm">
+                        <p className="line-clamp-2 pb-px text-[11px] font-bold leading-snug text-white drop-shadow-sm">
                           {product.title}
                         </p>
                         <p className="mt-0.5 text-[10px] font-medium text-white/88">
@@ -1234,17 +1236,24 @@ export function HomeFeed({
                   </div>
                   <div
                     className={cn(
-                      "relative z-0 flex min-h-0 flex-1 flex-col justify-between overflow-hidden p-3 transition-all duration-300 ease-out",
+                      "relative z-0 flex min-h-0 flex-1 flex-col gap-2 p-3 transition-all duration-300 ease-out",
                       imageHover &&
                         "max-h-0 min-h-0 flex-[0] px-0 py-0 opacity-0"
                     )}
                   >
-                    <p className="line-clamp-2 text-xs font-bold text-card-foreground">
+                    <p className="line-clamp-2 min-h-[2.6rem] break-words pb-px text-xs font-bold leading-snug text-card-foreground">
                       {product.title}
                     </p>
-                    <div className="flex flex-col gap-0.5">
+                    <div className="mt-auto flex flex-col gap-0.5">
                       <div className="font-bold text-emerald-700 dark:text-emerald-400">
                         ${priceUsd.toFixed(2)}
+                      </div>
+                      <div
+                        title="Catalog USD refunded as Credits after the order fulfills"
+                        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-amber-800 dark:text-amber-400"
+                      >
+                        <Zap className="h-3 w-3 shrink-0 fill-current" aria-hidden />
+                        {creditCashbackPct}% cashback
                       </div>
                       <div className="text-xs font-semibold text-amber-800 dark:text-amber-400">
                         {product.price_credits} Pts

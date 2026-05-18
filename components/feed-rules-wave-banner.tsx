@@ -6,14 +6,14 @@ import Image from "next/image";
 import { motion, useReducedMotion } from "framer-motion";
 import {
   ArrowRight,
-  Gift,
-  LockOpen,
   Sparkles,
   X,
   ChevronDown,
   ChevronUp,
   Zap,
   ChevronRight,
+  TrendingUp,
+  Award,
 } from "lucide-react";
 import {
   Drawer,
@@ -187,7 +187,9 @@ export function FeedRulesWaveBanner() {
               >
                 <Zap className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden />
                 <span>
-                  Earn <strong className="text-amber-200">Credits back</strong> after every Perks checkout — rebate is a % of catalog USD (often ~10%).
+                  Earn <strong className="text-amber-200">Credits back</strong> after every Perks checkout — up to{" "}
+                  <strong className="text-amber-200">20%</strong> (per product). Credits are{" "}
+                  <strong className="text-amber-200">for on-platform use only</strong>.
                 </span>
               </motion.li>
               <motion.li
@@ -196,9 +198,10 @@ export function FeedRulesWaveBanner() {
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ ...spring, delay: reduceMotion ? 0 : 0.14 }}
               >
-                <LockOpen className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" aria-hidden />
+                <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" aria-hidden />
                 <span>
-                  <strong className="text-cyan-200">Browse while locked</strong> — peek product pages now; checkout unlocks when you rank up.
+                  <strong className="text-cyan-200">Gigs &amp; XP</strong> — complete gigs to earn XP, rank up, and unlock more{" "}
+                  <strong className="text-cyan-200">free</strong> exclusive events, gigs, and Perks.
                 </span>
               </motion.li>
               <motion.li
@@ -207,9 +210,10 @@ export function FeedRulesWaveBanner() {
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ ...spring, delay: reduceMotion ? 0 : 0.22 }}
               >
-                <Gift className="mt-0.5 h-4 w-4 shrink-0 text-fuchsia-300" aria-hidden />
+                <Award className="mt-0.5 h-4 w-4 shrink-0 text-fuchsia-300" aria-hidden />
                 <span>
-                  <strong className="text-fuchsia-100">Gift links</strong> — friends sign in to claim; you both track it in Orders.
+                  <strong className="text-fuchsia-100">Brand gigs &amp; careers</strong> — top performers may earn platform or brand{" "}
+                  <strong className="text-fuchsia-100">internship certificates</strong> and unlock referral-style hiring opportunities.
                 </span>
               </motion.li>
             </ul>
@@ -245,7 +249,7 @@ export function FeedRulesWaveBanner() {
           <DrawerHeader className="flex flex-row items-center justify-between gap-3 text-left">
             <DrawerTitle className="flex items-center gap-2 font-display text-lg">
               <Sparkles className="h-5 w-5 text-brand-primary" />
-              How it works
+              Rules details
             </DrawerTitle>
             <DrawerClose className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-foreground ring-offset-background transition-colors hover:bg-muted/80 dark:bg-white/10">
               <X className="h-4 w-4" />
@@ -254,21 +258,29 @@ export function FeedRulesWaveBanner() {
           </DrawerHeader>
           <div className="max-h-[60vh] space-y-4 overflow-y-auto px-4 pb-8 text-sm leading-relaxed text-foreground">
             <section className="rounded-2xl border border-border bg-muted/40 p-4 dark:border-white/10 dark:bg-white/5">
-              <p className="mb-2 font-bold text-brand-primary">Credits cashback</p>
+              <p className="mb-2 font-bold text-brand-primary">1. Credits back on Perks</p>
               <p className="text-muted-foreground">
-                After your order fulfills, we credit your wallet with Pts based on each product&apos;s rebate rate and catalog USD line total (100 Pts ≈ US$1, same redemption logic as checkout). If the order is fully cancelled or returned and approved later, any cashback granted is clawed back. Exact % is set per product in admin.
+                After eligible Perks orders fulfill, we credit your wallet with Pts based on each product&apos;s rebate rate — often up to about{" "}
+                <strong className="text-foreground">20%</strong> of catalog-line USD on rebated SKUs (exact % per item is shown in-shop and set in admin).{" "}
+                <strong className="text-foreground">Credits stay on-platform</strong>: use them toward Perks, wallet flows, and other in-app perks per our Terms —
+                they are not cash, not transferable off-platform, and not redeemable for fiat.
               </p>
             </section>
             <section className="rounded-2xl border border-border bg-muted/40 p-4 dark:border-white/10 dark:bg-white/5">
-              <p className="mb-2 font-bold text-brand-primary">Rank &amp; previews</p>
+              <p className="mb-2 font-bold text-brand-primary">2. Gigs, XP &amp; unlocks</p>
               <p className="text-muted-foreground">
-                Below the minimum rank you can still open product detail (specs, gallery). Cart and checkout require that rank. In the shop, items you can buy today are sorted before locked ones.
+                Finish gigs across the app to earn <strong className="text-foreground">XP</strong>, level your rank, and{" "}
+                <strong className="text-foreground">unlock more</strong> free-to-enter exclusive{" "}
+                <strong className="text-foreground">events</strong>, curated <strong className="text-foreground">gigs</strong>, and{" "}
+                <strong className="text-foreground">Perks</strong> tiers that were gated for newer members — higher engagement opens more upside.
               </p>
             </section>
             <section className="rounded-2xl border border-border bg-muted/40 p-4 dark:border-white/10 dark:bg-white/5">
-              <p className="mb-2 font-bold text-brand-primary">Gifts</p>
+              <p className="mb-2 font-bold text-brand-primary">3. Brand gigs &amp; career tracks</p>
               <p className="text-muted-foreground">
-                Gift checkout generates a claim link — your friend signs in to unwrap with no double charge. Status lives in Orders for both sides.
+                Completing gigs for partner brands puts you on the radar for{" "}
+                <strong className="text-foreground">platform- or brand-issued internship certificates</strong> and similar proof-of-work credentials. Strong
+                standout work may also lead to intros, referrals, or pipeline opportunities — availability and criteria vary by brand and program.
               </p>
             </section>
           </div>
